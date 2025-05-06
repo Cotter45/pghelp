@@ -282,21 +282,22 @@ Available Actions:
   genfunctypes     - Generate TypeScript types for database functions.
   genschema        - Generate a Zod schema from the database schema.
   genfunctions     - Generate TypeScript functions for database queries.
-  config    - Update the configuration interactively.
+  config           - Update the configuration interactively.
   help             - Show this help message.
 
 Options:
   --action         - Specify the action to perform.
-  --migration, --name - Specify the migration name (for "create").
-  --revert         - Specify the number of migrations to revert (for "revert").
+  --migration,
+  --name           - Specify the migration name (for "create").
+  --revert         - Specify the number of migrations to revert.
   --db-url         - Provide the database connection string.
 
 Examples:
-  node pghelp.ts --action setup
-  node pghelp.ts --action create --name add_users_table
-  node pghelp.ts --action revert --revert 1
-  node pghelp.ts --action gentypes
-  node pghelp.ts --action help
+  pghelp --action setup
+  pghelp --action create --name add_users_table
+  pghelp --action revert --revert 1
+  pghelp --action gentypes
+  pghelp --action help
 `);
 }
 
