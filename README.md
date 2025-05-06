@@ -1,4 +1,4 @@
-# @cotter45/pghelp
+# pghelp
 
 A versatile CLI tool for PostgreSQL developers, offering schema dumps, migrations, and TypeScript code generation out of the box.
 
@@ -20,13 +20,13 @@ A versatile CLI tool for PostgreSQL developers, offering schema dumps, migration
 ## Installation
 
 ```bash
-npm install @cotter45/pghelp
+npm install pghelp
 ```
 
 or
 
 ```bash
-yarn add @cotter45/pghelp
+yarn add pghelp
 ```
 
 ## CLI Usage
