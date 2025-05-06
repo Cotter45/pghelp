@@ -1,0 +1,45 @@
+{
+  "name": "pghelp",
+  "description": "A command line tool for all flavors of PostgreSQL use.",
+  "license": "MIT",
+  "author": "Sean Cotter <sd.cotter45@gmail.com>",
+  "homepage": "https://github.com/Cotter45/pghelp",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cotter45/pghelp.git"
+  },
+  "keywords": [
+    "postgresql",
+    "cli",
+    "command line",
+    "database",
+    "pg",
+    "query",
+    "query builder",
+    "postgres",
+    "typescript",
+    "javascript",
+    "node",
+    "pghelp"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "version": "1.0.0",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "bin": {
+    "pghelp": "pghelp.js"
+  },
+  "scripts": {
+    "start": "node pghelp.js"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.10.0",
+    "@typescript-eslint/typescript-estree": "^8.19.0",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.1",
+    "picocolors": "^1.1.1"
+  }
+}

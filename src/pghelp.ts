@@ -1,0 +1,474 @@
+#!/usr/bin/env node
+
+/**
+ * This script is the entry point for database-related actions:
+ * - Setup local database
+ * - Dump schema
+ * - Create migration
+ * - Run migrations
+ * - Revert migrations
+ * - Generate types, function types, or Zod schema
+ *
+ * It uses minimist to parse named command-line arguments (e.g. --action, --migration, --revert, --db-url).
+ * Missing values are prompted interactively via @clack/prompts.
+ * It also ensures the DATABASE_URL environment variable is set from a .env file located in the project root.
+ */
+
+import dotenv from "dotenv";
+dotenv.config();
+
+import fs from "fs";
+import path from "path";
+import { Client } from "pg";
+import minimist from "minimist";
+import { promisify } from "util";
+import fsPromises from "fs/promises";
+import { exec } from "child_process";
+import { log, text, select, isCancel, spinner } from "@clack/prompts";
+
+import { generateSchema } from "./gen-schema";
+import { runMigrations } from "./run-migration";
+import { createMigration } from "./create-migration";
+import {
+  generateFunctionTypes,
+  generateTypes,
+  generateTypeSafeFunctions,
+} from "./gen-types";
+
+import type { Action, Config } from "./types";
+
+// Promisify exec for async/await usage.
+const execPromise = promisify(exec);
+
+// Default configuration values.
+const baseConfig: Config = {
+  migrationsDir: "migrations",
+  migrationPath: "db",
+  migrationsTable: "migrations",
+};
+
+/**
+ * Removes segments from a file path that come from node_modules or packages/postgres.
+ * Helps to determine the "project root" even when the script is run from within a package.
+ */
+const removePackagePath = (filePath: string): string => {
+  return filePath
+    .replace(/(\/|\\)node_modules(\/|\\)[^\/\\]+(\/|\\)?/g, "/")
+    .replace(/(\/|\\)packages(\/|\\)postgres(\/|\\)?/g, "/");
+};
+
+// Determine the config file location relative to the project root.
+const configFile = path.resolve(
+  removePackagePath(process.env.INIT_CWD || process.cwd()),
+  "./pghelp_config.json"
+);
+
+/**
+ * Checks for a .env file in the project root and ensures that the
+ * DATABASE_URL variable is defined. If not, prompts for it,
+ * writes (appends) it to the .env file, reloads environment variables, and returns the value.
+ */
+async function checkAndPromptForDbUrl(): Promise<string> {
+  const targetDir = process.env.INIT_CWD || process.cwd();
+  const targetRoot = removePackagePath(targetDir);
+  let envFilePath = path.join(targetRoot, ".env");
+
+  if (!fs.existsSync(envFilePath)) {
+    const envFilePathInput = await text({
+      message: "Enter the path to your .env file:",
+      initialValue: envFilePath,
+    });
+    if (isCancel(envFilePathInput)) {
+      log.error("Cancelled");
+      process.exit(0);
+    }
+    envFilePath = envFilePathInput;
+    if (!envFilePath.endsWith(".env")) {
+      log.error("Invalid .env file path. Please provide a valid path.");
+      process.exit(0);
+    }
+    if (!fs.existsSync(envFilePath)) {
+      log.error(
+        `The specified .env file does not exist at ${envFilePath}. Please create it.`
+      );
+      process.exit(0);
+    }
+    dotenv.config({ path: envFilePath });
+  } else {
+    log.success(`Loaded .env file at ${envFilePath}`);
+  }
+
+  let envVars: Record<string, string> = dotenv.parse(
+    fs.readFileSync(envFilePath)
+  );
+  const sanitizeUrl = (url: string) => url.replace(/"/g, "").trim();
+
+  if (!envVars.DATABASE_URL) {
+    const dbUrlInput = await text({
+      message: "Enter your Postgres database URL:",
+      initialValue: "postgres://username:password@host:port/database",
+    });
+    if (isCancel(dbUrlInput)) {
+      log.error("Cancelled");
+      process.exit(0);
+    }
+    const dbUrl = sanitizeUrl(dbUrlInput);
+    const newEnvContent = `DATABASE_URL=${dbUrl}\n`;
+    try {
+      await fsPromises.appendFile(envFilePath, newEnvContent, "utf8");
+      log.success(`.env file updated at ${envFilePath}`);
+    } catch (err) {
+      log.error("Error writing .env file: " + err);
+      process.exit(0);
+    }
+    dotenv.config({ path: envFilePath });
+    return dbUrl;
+  } else {
+    log.success(`Using Postgres database URL from .env at ${envFilePath}`);
+    return sanitizeUrl(envVars.DATABASE_URL);
+  }
+}
+
+/**
+ * Prompts the user for configuration details (migration path, migrations directory, table name).
+ *
+ * @returns A Config object with the provided values.
+ */
+async function promptConfig(): Promise<Config> {
+  const migrationPath = await text({
+    message: "Enter base migration path:",
+    initialValue: removePackagePath(
+      path.join(process.env.INIT_CWD || process.cwd(), baseConfig.migrationPath)
+    ),
+  });
+  if (isCancel(migrationPath)) {
+    log.error("Cancelled");
+    process.exit(0);
+  }
+
+  const migrationsDir = await text({
+    message: "Enter migrations directory name:",
+    initialValue: baseConfig.migrationsDir,
+  });
+  if (isCancel(migrationsDir)) {
+    log.error("Cancelled");
+    process.exit(0);
+  }
+
+  const migrationsTable = await text({
+    message: "Enter migrations table name:",
+    initialValue: baseConfig.migrationsTable,
+  });
+  if (isCancel(migrationsTable)) {
+    log.error("Cancelled");
+    process.exit(0);
+  }
+
+  return {
+    migrationPath: path.isAbsolute(migrationPath)
+      ? migrationPath
+      : path.resolve(migrationPath),
+    migrationsDir,
+    migrationsTable,
+  };
+}
+
+/**
+ * Loads configuration from the config file. If the file does not exist or cannot be parsed,
+ * prompts the user for configuration details and writes them to the config file.
+ *
+ * @returns A Config object.
+ */
+async function loadConfig(): Promise<Config> {
+  let config: Config = baseConfig;
+  if (fs.existsSync(configFile)) {
+    try {
+      const configContent = await fsPromises.readFile(configFile, "utf8");
+      const parsed = JSON.parse(configContent);
+      config = { ...baseConfig, ...parsed };
+    } catch (error) {
+      log.warn("Error reading config file. Let's set it up.");
+      config = await promptConfig();
+      fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+    }
+  } else {
+    log.warn("Config file not found. Let's set it up.");
+    config = await promptConfig();
+    fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+  }
+  return config;
+}
+
+/**
+ * Main entry point.
+ * Parses command-line arguments using minimist for named arguments:
+ *  --action (or first positional argument),
+ *  --migration / --name (for create),
+ *  --revert (for revert),
+ *  --db-url (database connection string).
+ * Prompts interactively for missing values, then executes the selected action.
+ */
+async function main(): Promise<void> {
+  const parsedArgs = minimist(process.argv.slice(2));
+
+  // Determine action from --action or first positional argument.
+  let action: Action;
+  if (parsedArgs.action) {
+    action = parsedArgs.action as Action;
+  } else if (parsedArgs._.length > 0) {
+    action = parsedArgs._[0] as Action;
+  } else {
+    const response = await select({
+      message: "Select action",
+      options: [
+        { value: "dump", label: "Dump schema" },
+        { value: "setup", label: "Setup local" },
+        { value: "create", label: "Create migration" },
+        { value: "run", label: "Run migrations" },
+        { value: "revert", label: "Revert migrations" },
+        { value: "gentypes", label: "Generate types" },
+        { value: "genfunctypes", label: "Generate function types" },
+        { value: "genschema", label: "Generate Zod schema" },
+        { value: "genfunctions", label: "Generate Typescript functions" },
+        { value: "genquerybuilder", label: "Generate Typesafe Query Builder" },
+      ],
+    });
+    if (isCancel(response)) {
+      log.error("Cancelled");
+      process.exit(0);
+    }
+    action = response as Action;
+  }
+
+  // For "create", allow a migration name via --migration or --name.
+  let migrationName = "";
+  if (action === "create") {
+    if (parsedArgs.migration) {
+      migrationName = parsedArgs.migration;
+    } else if (parsedArgs.name) {
+      migrationName = parsedArgs.name;
+    } else {
+      const migrationResp = await text({
+        message: "Enter migration name",
+      });
+      if (isCancel(migrationResp)) {
+        log.error("Cancelled");
+        process.exit(0);
+      }
+      migrationName = migrationResp;
+    }
+  }
+
+  // For "revert", allow a revert count via --revert.
+  let numberOfMigrations = 0;
+  if (action === "revert") {
+    if (parsedArgs.revert) {
+      numberOfMigrations = Number(parsedArgs.revert);
+      if (isNaN(numberOfMigrations) || numberOfMigrations <= 0) {
+        log.error("Invalid number of migrations to revert.");
+        process.exit(0);
+      }
+    } else {
+      const revertResp = await text({
+        message: "Enter number of migrations to revert",
+      });
+      if (isCancel(revertResp)) {
+        log.error("Cancelled");
+        process.exit(0);
+      }
+      numberOfMigrations = Number(revertResp);
+      if (isNaN(numberOfMigrations) || numberOfMigrations <= 0) {
+        log.error("Invalid number of migrations to revert.");
+        process.exit(0);
+      }
+    }
+  }
+
+  // Allow passing a database URL via --db-url.
+  let connectionString: string;
+  if (parsedArgs["db-url"]) {
+    connectionString = parsedArgs["db-url"];
+    log.success("Using database URL from command line argument.");
+  } else {
+    connectionString = await checkAndPromptForDbUrl();
+  }
+
+  // Validate the connection string.
+  try {
+    new URL(connectionString);
+  } catch (err) {
+    log.error("Invalid Postgres database URL: " + err);
+    process.exit(0);
+  }
+
+  // Load additional configuration.
+  const config = await loadConfig();
+
+  // Determine the absolute path for migrations.
+  const absPath = path.resolve(config.migrationPath, config.migrationsDir);
+  if (!fs.existsSync(absPath)) {
+    log.warn(`Directory ${absPath} does not exist. Creating...`);
+    try {
+      fs.mkdirSync(absPath, { recursive: true });
+      fs.mkdirSync(path.join(absPath, "up"));
+      fs.mkdirSync(path.join(absPath, "down"));
+    } catch (error) {
+      log.error(`Failed to create directories at ${absPath}: ${error}`);
+      process.exit(0);
+    }
+  }
+
+  // Check if .gitignore in root
+  const gitignorePath = path.join(
+    removePackagePath(process.env.INIT_CWD || process.cwd()),
+    ".gitignore"
+  );
+  if (fs.existsSync(gitignorePath)) {
+    const gitignoreContent = fs.readFileSync(gitignorePath, "utf8");
+    if (!gitignoreContent.includes("pghelp_config.json")) {
+      fs.appendFileSync(gitignorePath, "pghelp_config.json\n");
+      log.success("Added pghelp_config.json to .gitignore");
+    }
+  } else {
+    // create .gitignore if it doesn't exist
+    fs.writeFileSync(gitignorePath, "pghelp_config.json\n");
+    log.success("Created .gitignore and added pghelp_config.json to it");
+  }
+
+  let client: Client | undefined;
+  if (!["setup", "dump"].includes(action)) {
+    client = new Client({ connectionString });
+    try {
+      await client.connect();
+    } catch (error) {
+      log.error("Failed to connect to the database: " + error);
+      process.exit(0);
+    }
+  }
+
+  try {
+    if (action === "setup") {
+      const s = spinner();
+      s.start("Setting up local database...");
+      const url = new URL(connectionString);
+      const dbUser = url.username;
+      const dbPassword = url.password;
+      const dbHost = url.hostname;
+      const dbPort = url.port;
+      const dbName = url.pathname.split("/")[1];
+
+      process.env.PGPASSWORD = dbPassword;
+      try {
+        await execPromise(
+          `psql -U ${dbUser} -h ${dbHost} -p ${dbPort} -c "CREATE DATABASE ${dbName}"`
+        );
+      } catch (error) {
+        s.stop("Database already exists.");
+      }
+      try {
+        await execPromise(
+          `psql -U ${dbUser} -h ${dbHost} -p ${dbPort} -c "CREATE ROLE pg_su;"`
+        );
+        await execPromise(
+          `psql -U ${dbUser} -h ${dbHost} -p ${dbPort} -c "CREATE ROLE pg_admin;"`
+        );
+      } catch (error) {
+        s.stop("Roles already exist.");
+      }
+      const initPath = path.join(absPath, "init.sql");
+      if (!fs.existsSync(initPath)) {
+        s.stop("init.sql not found.");
+        process.exit(0);
+      }
+      await execPromise(
+        `psql -U ${dbUser} -h ${dbHost} -p ${dbPort} -d ${dbName} -f ${initPath}`
+      );
+      s.stop("Database setup complete.");
+    } else if (action === "dump") {
+      const s = spinner();
+      s.start("Dumping schema...");
+      const dumpPath = path.join(absPath, "init.sql");
+      const url = new URL(connectionString);
+      const dbUser = url.username;
+      const dbPassword = url.password;
+      const dbHost = url.hostname;
+      const dbPort = url.port;
+      const dbName = url.pathname.split("/")[1];
+
+      process.env.PGPASSWORD = dbPassword;
+      await execPromise(
+        `pg_dump -U ${dbUser} -h ${dbHost} -p ${dbPort} -d ${dbName} -f ${dumpPath}`
+      );
+      delete process.env.PGPASSWORD;
+      s.stop("Schema dump complete.");
+    } else if (action === "create") {
+      const s = spinner();
+      s.start("Creating migration...");
+      await createMigration(client!, migrationName, config);
+      s.stop("Migration created.");
+    } else if (action === "run") {
+      const s = spinner();
+      s.start("Running migrations...");
+      await runMigrations(client!, "up", config);
+      s.stop("Migrations run successfully.");
+    } else if (action === "revert") {
+      const s = spinner();
+      s.start("Reverting migrations...");
+      await runMigrations(client!, "down", config, numberOfMigrations);
+      s.stop("Migrations reverted successfully.");
+    } else if (action === "gentypes") {
+      const s = spinner();
+      s.start("Generating types...");
+      const outPath = path.join(absPath, "../types");
+      if (!fs.existsSync(outPath)) {
+        fs.mkdirSync(outPath, { recursive: true });
+      }
+      await generateTypes(client!, outPath);
+      s.stop("Types generated.");
+    } else if (action === "genfunctypes") {
+      const s = spinner();
+      s.start("Generating function types...");
+      const outPath = path.join(absPath, "../types");
+      if (!fs.existsSync(outPath)) {
+        fs.mkdirSync(outPath, { recursive: true });
+      }
+      await generateFunctionTypes(client!, outPath);
+      s.stop("Function types generated.");
+    } else if (action === "genfunctions") {
+      const s = spinner();
+      s.start("Generating functions...");
+      const outPath = path.join(absPath, "../functions");
+      if (!fs.existsSync(outPath)) {
+        fs.mkdirSync(outPath, { recursive: true });
+      }
+      await generateTypeSafeFunctions(client!, outPath);
+      s.stop("Functions generated.");
+    } else if (action === "genschema") {
+      const s = spinner();
+      s.start("Generating Zod schema...");
+      const outPath = path.join(absPath, "../schema");
+      if (!fs.existsSync(outPath)) {
+        fs.mkdirSync(outPath, { recursive: true });
+      }
+      await generateSchema(outPath);
+      s.stop("Zod schema generated.");
+    }
+  } catch (error: any) {
+    log.error("An error occurred: " + error);
+  } finally {
+    if (client) {
+      await client.end();
+      log.success("Database connection closed.");
+    }
+  }
+}
+
+main()
+  .then(() => {
+    log.info("");
+    process.exit(0);
+  })
+  .catch((error) => {
+    log.error("Unexpected error: " + error);
+    process.exit(0);
+  });

@@ -1,0 +1,9 @@
+# FILES
+.env
+.DS_Store
+pghelp_config.json
+
+# FOLDERS
+dist
+src/db
+node_modules
