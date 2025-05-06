@@ -26,13 +26,13 @@
     "node": ">=14"
   },
   "version": "1.0.0",
-  "main": "index.js",
-  "types": "index.d.ts",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
-    "pghelp": "pghelp.js"
+    "pghelp": "dist/pghelp.js"
   },
   "scripts": {
-    "start": "node pghelp.js"
+    "start": "node dist/pghelp.js"
   },
   "dependencies": {
     "@clack/prompts": "^0.10.0",
