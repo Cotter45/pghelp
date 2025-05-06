@@ -1,7 +1,7 @@
 {
   "name": "pghelp",
   "description": "A command line tool for all flavors of PostgreSQL use.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "license": "MIT",
   "author": "Sean Cotter <sd.cotter45@gmail.com>",
   "homepage": "https://github.com/Cotter45/pghelp",
