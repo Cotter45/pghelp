@@ -19,14 +19,48 @@ A versatile CLI tool for PostgreSQL developers, offering schema dumps, migration
 
 ## Installation
 
+1. npm
+
+```bash
+npm install -g pghelp
+```
+
+2. yarn
+
+```bash
+yarn global add pghelp
+```
+
+3. pnpm
+
+```bash
+pnpm add -g pghelp
+```
+
+4. Or, if you prefer to use it as a local dependency, install it in your project:
+
 ```bash
 npm install pghelp
 ```
 
-or
-
 ```bash
 yarn add pghelp
+```
+
+```bash
+pnpm add pghelp
+```
+
+- then add a script to your package.json:
+
+```json
+{
+  "scripts": {
+    "pghelp": "pghelp",
+    "dump": "pghelp --action dump"
+    // etc...
+  }
+}
 ```
 
 ## CLI Usage
