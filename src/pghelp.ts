@@ -230,7 +230,6 @@ async function main(): Promise<void> {
         { value: "genfunctypes", label: "Generate function types" },
         { value: "genschema", label: "Generate Zod schema" },
         { value: "genfunctions", label: "Generate Typescript functions" },
-        { value: "genquerybuilder", label: "Generate Typesafe Query Builder" },
       ],
     });
     if (isCancel(response)) {
@@ -329,10 +328,22 @@ async function main(): Promise<void> {
       fs.appendFileSync(gitignorePath, "pghelp_config.json\n");
       log.success("Added pghelp_config.json to .gitignore");
     }
+
+    if (!gitignoreContent.includes(".env")) {
+      fs.appendFileSync(gitignorePath, ".env\n");
+      log.success("Added .env to .gitignore");
+    }
   } else {
     // create .gitignore if it doesn't exist
     fs.writeFileSync(gitignorePath, "pghelp_config.json\n");
     log.success("Created .gitignore and added pghelp_config.json to it");
+
+    const gitignoreContent = fs.readFileSync(gitignorePath, "utf8");
+
+    if (!gitignoreContent.includes(".env")) {
+      fs.appendFileSync(gitignorePath, ".env\n");
+      log.success("Added .env to .gitignore");
+    }
   }
 
   let client: Client | undefined;
