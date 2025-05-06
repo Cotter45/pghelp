@@ -325,23 +325,23 @@ async function main(): Promise<void> {
   if (fs.existsSync(gitignorePath)) {
     const gitignoreContent = fs.readFileSync(gitignorePath, "utf8");
     if (!gitignoreContent.includes("pghelp_config.json")) {
-      fs.appendFileSync(gitignorePath, "pghelp_config.json\n");
+      fs.appendFileSync(gitignorePath, "\npghelp_config.json\n");
       log.success("Added pghelp_config.json to .gitignore");
     }
 
     if (!gitignoreContent.includes(".env")) {
-      fs.appendFileSync(gitignorePath, ".env\n");
+      fs.appendFileSync(gitignorePath, "\n.env\n");
       log.success("Added .env to .gitignore");
     }
   } else {
     // create .gitignore if it doesn't exist
-    fs.writeFileSync(gitignorePath, "pghelp_config.json\n");
+    fs.writeFileSync(gitignorePath, "\npghelp_config.json\n");
     log.success("Created .gitignore and added pghelp_config.json to it");
 
     const gitignoreContent = fs.readFileSync(gitignorePath, "utf8");
 
     if (!gitignoreContent.includes(".env")) {
-      fs.appendFileSync(gitignorePath, ".env\n");
+      fs.appendFileSync(gitignorePath, "\n.env\n");
       log.success("Added .env to .gitignore");
     }
   }
