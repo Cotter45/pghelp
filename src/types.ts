@@ -23,7 +23,9 @@ export type Action =
   | "gentypes"
   | "genfunctypes"
   | "genfunctions"
-  | "genschema";
+  | "genschema"
+  | "config"
+  | "help";
 
 export type Operator = "=" | "!=" | "<" | "<=" | ">" | ">=" | "LIKE" | "IN";
 

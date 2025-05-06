@@ -200,6 +200,107 @@ async function loadConfig(): Promise<Config> {
 }
 
 /**
+ * Updates the configuration interactively.
+ *
+ * @param configFile - The path to the configuration file.
+ */
+async function updateConfig(configFile: string): Promise<void> {
+  log.info("Updating configuration...");
+
+  let currentConfig: Config = baseConfig;
+  if (fs.existsSync(configFile)) {
+    try {
+      const configContent = await fsPromises.readFile(configFile, "utf8");
+      currentConfig = { ...baseConfig, ...JSON.parse(configContent) };
+    } catch (error) {
+      log.warn("Error reading existing config file. Starting fresh.");
+    }
+  }
+
+  const migrationPath = await text({
+    message: "Enter base migration path:",
+    initialValue: currentConfig.migrationPath,
+  });
+  if (isCancel(migrationPath)) {
+    log.error("Cancelled");
+    process.exit(0);
+  }
+
+  const migrationsDir = await text({
+    message: "Enter migrations directory name:",
+    initialValue: currentConfig.migrationsDir,
+  });
+  if (isCancel(migrationsDir)) {
+    log.error("Cancelled");
+    process.exit(0);
+  }
+
+  const migrationsTable = await text({
+    message: "Enter migrations table name:",
+    initialValue: currentConfig.migrationsTable,
+  });
+  if (isCancel(migrationsTable)) {
+    log.error("Cancelled");
+    process.exit(0);
+  }
+
+  const updatedConfig: Config = {
+    migrationPath: path.isAbsolute(migrationPath)
+      ? migrationPath
+      : path.resolve(migrationPath),
+    migrationsDir,
+    migrationsTable,
+  };
+
+  try {
+    await fsPromises.writeFile(
+      configFile,
+      JSON.stringify(updatedConfig, null, 2),
+      "utf8"
+    );
+    log.success("Configuration updated successfully.");
+  } catch (error) {
+    log.error("Failed to update configuration: " + error);
+    process.exit(0);
+  }
+}
+
+/**
+ * Prints all available actions and their descriptions.
+ */
+function printHelp(): void {
+  console.log(`
+Usage: pghelp [--action <action>] [options]
+
+Available Actions:
+  setup            - Setup a local database.
+  dump             - Dump the database schema to a file.
+  create           - Create a new migration file.
+  run              - Run all pending migrations.
+  revert           - Revert the last migration(s).
+  gentypes         - Generate TypeScript types from the database schema.
+  genfunctypes     - Generate TypeScript types for database functions.
+  genschema        - Generate a Zod schema from the database schema.
+  genfunctions     - Generate TypeScript functions for database queries.
+  config    - Update the configuration interactively.
+  help             - Show this help message.
+
+Options:
+  --action         - Specify the action to perform.
+  --migration, --name - Specify the migration name (for "create").
+  --revert         - Specify the number of migrations to revert (for "revert").
+  --db-url         - Provide the database connection string.
+
+Examples:
+  node pghelp.ts --action setup
+  node pghelp.ts --action create --name add_users_table
+  node pghelp.ts --action revert --revert 1
+  node pghelp.ts --action gentypes
+  node pghelp.ts --action help
+`);
+}
+
+/**
  * Main entry point.
  * Parses command-line arguments using minimist for named arguments:
  *  --action (or first positional argument),
@@ -221,6 +322,8 @@ async function main(): Promise<void> {
     const response = await select({
       message: "Select action",
       options: [
+        { value: "help", label: "Help" },
+        { value: "config", label: "Update Config" },
         { value: "dump", label: "Dump schema" },
         { value: "setup", label: "Setup local" },
         { value: "create", label: "Create migration" },
@@ -395,6 +498,11 @@ async function main(): Promise<void> {
         `psql -U ${dbUser} -h ${dbHost} -p ${dbPort} -d ${dbName} -f ${initPath}`
       );
       s.stop("Database setup complete.");
+    } else if (action === "help") {
+      printHelp();
+      process.exit(0);
+    } else if (action === "config") {
+      await updateConfig(configFile);
     } else if (action === "dump") {
       const s = spinner();
       s.start("Dumping schema...");

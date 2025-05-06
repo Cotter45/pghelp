@@ -69,6 +69,12 @@ pnpm add pghelp
 # Start Interactive CLI
 pghelp
 
+# Help
+pghelp --help
+
+# Update pghelp config
+pghelp --config
+
 # Dump your schema
 pghelp --action dump
 
@@ -127,6 +133,8 @@ These are saved to pghelp_config.json and auto‑ignored in .gitignore.
   "migrationsTable": "migrations"
 }
 ```
+
+You can update these settings in pghelp_config.json or via the CLI at any time.
 
 ## Query Builder
 
