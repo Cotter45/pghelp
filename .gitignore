@@ -4,6 +4,7 @@
 pghelp_config.json
 
 # FOLDERS
+db
 dist
 src/db
 node_modules

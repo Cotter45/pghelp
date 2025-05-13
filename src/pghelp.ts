@@ -179,8 +179,9 @@ async function promptConfig(): Promise<Config> {
  *
  * @returns A Config object.
  */
-async function loadConfig(): Promise<Config> {
+async function loadConfig(parsedArgs: Record<string, string>): Promise<Config> {
   let config: Config = baseConfig;
+
   if (fs.existsSync(configFile)) {
     try {
       const configContent = await fsPromises.readFile(configFile, "utf8");
@@ -192,9 +193,27 @@ async function loadConfig(): Promise<Config> {
       fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
     }
   } else {
-    log.warn("Config file not found. Let's set it up.");
-    config = await promptConfig();
-    fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+    const migrationPath = parsedArgs["migration-path"];
+    const migrationsDir = parsedArgs["migrations-dir"];
+    const migrationsTable = parsedArgs["migrations-table"];
+
+    console.log(
+      `Migration path: ${migrationPath}, Migrations directory: ${migrationsDir}, Migrations table: ${migrationsTable}`
+    );
+
+    if (migrationPath && migrationsDir && migrationsTable) {
+      config = {
+        migrationPath: path.isAbsolute(migrationPath)
+          ? migrationPath
+          : path.resolve(migrationPath),
+        migrationsDir,
+        migrationsTable,
+      };
+    } else {
+      log.warn("Config file not found. Let's set it up.");
+      config = await promptConfig();
+      fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+    }
   }
   return config;
 }
@@ -286,11 +305,13 @@ Available Actions:
   help             - Show this help message.
 
 Options:
-  --action         - Specify the action to perform.
-  --migration,
-  --name           - Specify the migration name (for "create").
-  --revert         - Specify the number of migrations to revert.
-  --db-url         - Provide the database connection string.
+  --action             - Specify the action to perform.
+  --db-url             - Provide the database connection string.
+  --migration-path     - Specify the base migration path (default: "db").
+  --migrations-dir     - Specify the migrations directory name (default: "migrations").
+  --migrations-table   - Specify the migrations table name (default: "migrations").
+  --migration, --name  - Specify the migration name (for "create").
+  --revert             - Specify the number of migrations to revert (for "revert").
 
 Examples:
   pghelp --action setup
@@ -405,7 +426,7 @@ async function main(): Promise<void> {
   }
 
   // Load additional configuration.
-  const config = await loadConfig();
+  const config = await loadConfig(parsedArgs);
 
   // Determine the absolute path for migrations.
   const absPath = path.resolve(config.migrationPath, config.migrationsDir);

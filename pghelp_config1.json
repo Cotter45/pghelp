@@ -1,0 +1,5 @@
+{
+  "migrationPath": "/Users/seancotter/Desktop/dev/prodApps/pghelp/db",
+  "migrationsDir": "migrations",
+  "migrationsTable": "migrations"
+}
