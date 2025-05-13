@@ -197,10 +197,6 @@ async function loadConfig(parsedArgs: Record<string, string>): Promise<Config> {
     const migrationsDir = parsedArgs["migrations-dir"];
     const migrationsTable = parsedArgs["migrations-table"];
 
-    console.log(
-      `Migration path: ${migrationPath}, Migrations directory: ${migrationsDir}, Migrations table: ${migrationsTable}`
-    );
-
     if (migrationPath && migrationsDir && migrationsTable) {
       config = {
         migrationPath: path.isAbsolute(migrationPath)
