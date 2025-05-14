@@ -72,7 +72,8 @@ function snakeToCamel(str: string): string {
  * @returns A record where keys are type names and values are Zod schema strings.
  */
 function generateZodSchemas(
-  types: Record<string, string>
+  types: Record<string, string>,
+  forceOptional: boolean = false
 ): Record<string, string> {
   const zodSchemas: Record<string, string> = {};
 
@@ -99,7 +100,7 @@ function generateZodSchemas(
           if (isNullable) {
             finalZodType += ".nullable()";
           }
-          if (optionalMarker) {
+          if (forceOptional || optionalMarker) {
             finalZodType += ".optional()";
           }
           return `  ${snakeToCamel(fieldName)}: ${finalZodType}`;
@@ -193,12 +194,15 @@ function writeZodSchemasToFile(
  *
  * @param outPath - The directory where the generated types and schemas reside.
  */
-export async function generateSchema(outPath: string): Promise<void> {
+export async function generateSchema(
+  outPath: string,
+  forceOptional = false
+): Promise<void> {
   const typesFilePath = path.resolve(outPath, "../types/generated-types.ts");
   const outputFilePath = path.resolve(outPath, "generated-schemas.ts");
 
   const types = extractTypesFromFile(typesFilePath);
-  const zodSchemas = generateZodSchemas(types);
+  const zodSchemas = generateZodSchemas(types, forceOptional);
 
   writeZodSchemasToFile(zodSchemas, outputFilePath);
 }

@@ -350,6 +350,10 @@ async function main(): Promise<void> {
         { value: "gentypes", label: "Generate types" },
         { value: "genfunctypes", label: "Generate function types" },
         { value: "genschema", label: "Generate Zod schema" },
+        {
+          value: "genoptionalschema",
+          label: "Generate Zod schema (make everything optional)",
+        },
         { value: "genfunctions", label: "Generate Typescript functions" },
       ],
     });
@@ -583,11 +587,38 @@ async function main(): Promise<void> {
     } else if (action === "genschema") {
       const s = spinner();
       s.start("Generating Zod schema...");
+
+      // check if types exists, if not create it
+      const typesPath = path.join(absPath, "../types");
+      if (!fs.existsSync(typesPath)) {
+        fs.mkdirSync(typesPath, { recursive: true });
+        await generateTypes(client!, typesPath);
+      }
+
+      // check if schema exists, if not create it
       const outPath = path.join(absPath, "../schema");
       if (!fs.existsSync(outPath)) {
         fs.mkdirSync(outPath, { recursive: true });
       }
       await generateSchema(outPath);
+      s.stop("Zod schema generated.");
+    } else if (action === "genoptionalschema") {
+      const s = spinner();
+      s.start("Generating Zod schema...");
+
+      // check if types exists, if not create it
+      const typesPath = path.join(absPath, "../types");
+      if (!fs.existsSync(typesPath)) {
+        fs.mkdirSync(typesPath, { recursive: true });
+        await generateTypes(client!, typesPath);
+      }
+
+      // check if schema exists, if not create it
+      const outPath = path.join(absPath, "../schema");
+      if (!fs.existsSync(outPath)) {
+        fs.mkdirSync(outPath, { recursive: true });
+      }
+      await generateSchema(outPath, true);
       s.stop("Zod schema generated.");
     }
   } catch (error: any) {

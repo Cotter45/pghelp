@@ -24,6 +24,7 @@ export type Action =
   | "genfunctypes"
   | "genfunctions"
   | "genschema"
+  | "genoptionalschema"
   | "config"
   | "help";
 
