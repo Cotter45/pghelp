@@ -236,14 +236,24 @@ export async function generateFunctionTypes(
   for (const func of functions) {
     const { function_name, args, return_type, returns_set } = func;
 
+    // Skip functions that do not return anything
+    if (return_type === "void" || return_type === "record") {
+      continue;
+    }
+
     // Parse arguments
     const params = args
       .split(", ")
       .map((arg) => {
         const [paramName, paramType] = arg.split(" ");
+
+        if (!paramName || !paramType) {
+          return null;
+        }
         const tsType = mapPostgresTypeByName(paramType);
         return `  ${paramName}: ${tsType};`;
       })
+      .filter((param) => param !== null)
       .join("\n");
 
     // Parse return type
