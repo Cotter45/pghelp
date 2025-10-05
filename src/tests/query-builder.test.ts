@@ -174,6 +174,85 @@ describe("QueryBuilder", () => {
       );
       expect(query.params).toEqual(["new@example.com", 1, "%Alice%"]);
     });
+
+    it("should generate an UPDATE query with no WHERE clause", () => {
+      const query = db
+        .from("users")
+        .update({ email: "new@example.com" })
+        .allowUnsafeUpdate()
+        .toSQL();
+
+      expect(query.sql).toBe("UPDATE users SET email = $1");
+      expect(query.params).toEqual(["new@example.com"]);
+    });
+
+    it("should handle batch updates arrays", () => {
+      const query = db
+        .from("users")
+        .update({ email: "new@example.com" })
+        .where("id", "IN", [1, 2, 3])
+        .returning("id", "email")
+        .toSQL();
+
+      expect(query.sql).toBe(
+        "UPDATE users SET email = $1 WHERE id = ANY($2) RETURNING id, email"
+      );
+      expect(query.params).toEqual(["new@example.com", [1, 2, 3]]);
+    });
+
+    it("should generate correct SQL and parameters for batch updates", () => {
+      const db = createQueryBuilder<Schema>();
+
+      const batchUpdates = [
+        {
+          where: { id: 1 },
+          set: { name: "Test", email: "user1@example.com" },
+        },
+        {
+          where: { id: 2 },
+          set: { name: "Again", email: "user2@example.com" },
+        },
+      ];
+
+      const query = db
+        .from("users")
+        .batchUpdate(batchUpdates)
+        .returning("id", "name", "email")
+        .toSQL();
+
+      // Expected SQL
+      const expectedSQL = `
+      UPDATE users
+      SET name = CASE
+          WHEN id = $1 THEN $2
+          WHEN id = $3 THEN $4 
+        ELSE name END, email = CASE
+          WHEN id = $5 THEN $6
+          WHEN id = $7 THEN $8
+        ELSE email END WHERE id = $9 OR id = $10
+        RETURNING id, name, email
+    `.trim();
+
+      // Expected parameters
+      const expectedParams = [
+        1,
+        "Test",
+        2,
+        "Again",
+        1,
+        "user1@example.com",
+        2,
+        "user2@example.com",
+        1,
+        2,
+      ];
+
+      // Assertions
+      expect(query.sql.replace(/\s+/g, " ")).toBe(
+        expectedSQL.replace(/\s+/g, " ")
+      );
+      expect(query.params).toEqual(expectedParams);
+    });
   });
 
   // --- DELETE Tests ---
@@ -204,6 +283,17 @@ describe("QueryBuilder", () => {
 
       expect(query.sql).toBe("DELETE FROM users");
       expect(query.params).toEqual([]);
+    });
+
+    it("should generate a DELETE query with IN clause", () => {
+      const query = db
+        .from("users")
+        .delete()
+        .where("id", "IN", [1, 2, 3])
+        .toSQL();
+
+      expect(query.sql).toBe("DELETE FROM users WHERE id IN ($1, $2, $3)");
+      expect(query.params).toEqual([1, 2, 3]);
     });
   });
 
@@ -1132,23 +1222,6 @@ describe("QueryBuilder", () => {
         "INSERT INTO users (id, name, email) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email"
       );
       expect(query.params).toEqual([1, "Alice", "alice@example.com"]);
-    });
-  });
-
-  // --- Batch Updates ---
-  describe("Batch Updates", () => {
-    it("should generate a batch UPDATE query", () => {
-      const query = db
-        .from("users")
-        .batchUpdate([
-          { where: { id: 1 }, set: { name: "Alice Updated" } },
-          { where: { id: 2 }, set: { name: "Bob Updated" } },
-        ])
-        .toSQL();
-
-      expect(query.sql).toContain("WHEN id = $1 THEN name = $2");
-      expect(query.sql).toContain("WHEN id = $3 THEN name = $4");
-      expect(query.params).toEqual([1, "Alice Updated", 2, "Bob Updated"]);
     });
   });
 

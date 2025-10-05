@@ -36,28 +36,32 @@
   },
   "scripts": {
     "build": "tsc",
+    "check": "tsc --noEmit",
     "db": "npm run build && node dist/scripts/db/pghelp.js",
     "start": "npm run build && node dist/pghelp.js",
     "qb": "npm run build && node dist/query-builder.js",
     "test": "jest",
     "test:watch": "jest --watchAll",
-    "test:coverage": "jest --coverage"
+    "test:coverage": "jest --coverage",
+    "update": "ncu -u && npm install"
   },
   "dependencies": {
-    "@clack/prompts": "^0.10.0",
-    "@typescript-eslint/typescript-estree": "^8.19.0",
-    "dotenv": "^16.4.5",
+    "@clack/prompts": "^0.11.0",
+    "@typescript-eslint/typescript-estree": "^8.45.0",
+    "dotenv": "^17.2.3",
     "minimist": "^1.2.8",
-    "pg": "^8.13.1",
+    "pg": "^8.16.3",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
-    "@types/jest": "^29.5.14",
+    "@types/jest": "^30.0.0",
     "@types/minimist": "^1.2.5",
-    "@types/node": "^22.13.16",
-    "@types/pg": "^8.11.11",
-    "jest": "^29.7.0",
-    "ts-jest": "^29.3.1",
-    "typescript": "^5.8.2"
+    "@types/node": "^24.6.2",
+    "@types/pg": "^8.15.5",
+    "jest": "^30.2.0",
+    "npm-check-updates": "^19.0.0",
+    "ts-jest": "^29.4.4",
+    "typescript": "^5.9.3",
+    "zod": "^4.1.11"
   }
 }

@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
-import fs from "fs";
+import fs from "fs/promises";
 import path from "path";
-
 import type { Client } from "pg";
 import type { PgUserFunction } from "./types";
 
-// Helper to map Postgres data types (by name) to TypeScript types
+/* ----------------------------------------------
+ * Helpers
+ * ---------------------------------------------- */
+
 function mapPostgresTypeByName(dataType: string): string {
   const typeMap: Record<string, string> = {
     integer: "number",
@@ -59,45 +61,29 @@ function mapPostgresTypeByName(dataType: string): string {
   return typeMap[dataType] || "any";
 }
 
-// Mapping based on Postgres OIDs to TypeScript types
-const typeMap: Record<number, string> = {
-  // Boolean
+const oidMap: Record<number, string> = {
   16: "boolean",
-
-  // Numeric
   20: "bigint",
   21: "number",
   23: "number",
   700: "number",
   701: "number",
   1700: "number",
-
-  // String
   18: "string",
   19: "string",
   25: "string",
   1042: "string",
   1043: "string",
-
-  // Date/Time
   1082: "Date",
   1114: "Date",
   1184: "Date",
   1083: "string",
   1266: "string",
   1186: "string",
-
-  // JSON
   114: "Record<string, unknown>",
   3802: "Record<string, unknown>",
-
-  // UUID
   2950: "string",
-
-  // Binary
   17: "Buffer",
-
-  // Arrays
   1000: "boolean[]",
   1001: "Buffer[]",
   1007: "number[]",
@@ -105,260 +91,239 @@ const typeMap: Record<number, string> = {
   1115: "Date[]",
   1182: "string[]",
   1231: "number[]",
-
-  // Geometric types
   600: "{ x: number, y: number }",
   601: "{ x1: number, y1: number, x2: number, y2: number }",
   718: "{ x: number, y: number, r: number }",
-  603: "unknown",
-  604: "unknown",
-
-  // Range Types
   3904: "{ lower: number, upper: number }",
   3912: "{ lower: string, upper: string }",
   3926: "{ lower: bigint, upper: bigint }",
-
-  // Full-text search
   3613: "string",
-
-  // Network types
   869: "string",
   650: "string",
   774: "string",
   829: "string",
-
-  // Miscellaneous
   2278: "null",
   2249: "Record<string, unknown>",
 };
 
 function mapPostgresTypeToTsType(oid: number): string {
-  return typeMap[oid] || "any";
+  return oidMap[oid] || "any";
 }
 
-function capitalize(str: string): string {
+/** Convert snake_case → PascalCase */
+function pascalCase(str: string): string {
   return str
     .split("_")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join("_");
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join("");
 }
 
-/**
- * Generates TypeScript types for every table in the public schema.
- *
- * @param client - The PostgreSQL client.
- * @param outPath - The directory where the generated file should be saved.
- */
+/* ----------------------------------------------
+ * Core: Generate table types
+ * ---------------------------------------------- */
 export async function generateTypes(
   client: Client,
-  outPath: string
+  outPath: string,
+  schema = "public"
 ): Promise<void> {
-  // Fetch all tables in the public schema
-  const tables = await client.query<{ table_name: string }>(`
-    SELECT table_name
-    FROM information_schema.tables
-    WHERE table_schema = 'public';
-  `);
+  const tables = await client.query<{ table_name: string }>(
+    `SELECT table_name FROM information_schema.tables WHERE table_schema = $1;`,
+    [schema]
+  );
 
-  let typeDefinitions = "// Auto-generated types from database schema\n";
+  let typeDefs = "// Auto-generated types from database schema\n";
 
-  for (const row of tables.rows) {
-    const tableName = row.table_name;
-
-    // Fetch columns with their data types and OIDs
+  for (const { table_name } of tables.rows) {
     const columns = await client.query<{
       column_name: string;
       udt_name: string;
       data_type: string;
-      is_nullable: string;
+      not_null: boolean;
+      description: string | null;
       oid: number;
-    }>(`
+    }>(
+      `
       SELECT
-        column_name,
-        udt_name,
-        data_type,
-        is_nullable,
+        a.attname AS column_name,
+        t.typname AS udt_name,
+        pg_catalog.format_type(a.atttypid, a.atttypmod) AS data_type,
+        a.attnotnull AS not_null,
+        col_description(c.oid, a.attnum) AS description,
         a.atttypid AS oid
-      FROM
-        information_schema.columns
-      JOIN pg_attribute a ON a.attname = column_name
-      JOIN pg_class c ON c.oid = a.attrelid
-      WHERE
-        table_name = '${tableName}'
-        AND c.relname = '${tableName}';
-    `);
+      FROM pg_attribute a
+      JOIN pg_class c ON a.attrelid = c.oid
+      JOIN pg_type t ON a.atttypid = t.oid
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = $1
+        AND c.relname = $2
+        AND a.attnum > 0
+        AND NOT a.attisdropped;
+    `,
+      [schema, table_name]
+    );
 
-    const fields = columns.rows
-      .map((col) => {
-        const tsType =
-          (mapPostgresTypeToTsType(col.oid) ||
-            mapPostgresTypeByName(col.data_type)) +
-          (col.is_nullable === "YES" ? " | null" : "");
-        return `  ${col.column_name}: ${tsType};`;
-      })
-      .join("\n");
+    const fieldStrings: string[] = [];
 
-    typeDefinitions += `
-export type ${capitalize(tableName)}_Type = {
-${fields}
+    for (const col of columns.rows) {
+      let tsType = mapPostgresTypeToTsType(col.oid);
+      if (tsType === "any") tsType = mapPostgresTypeByName(col.data_type);
+
+      // Handle array udt names like "_text", "_uuid"
+      if (col.udt_name.startsWith("_")) {
+        const base = col.udt_name.slice(1);
+        tsType = `${mapPostgresTypeByName(base)}[]`;
+      }
+
+      // Detect enum types
+      const enumRes = await client.query<{ enumlabel: string }>(
+        `
+        SELECT e.enumlabel
+        FROM pg_type t
+        JOIN pg_enum e ON t.oid = e.enumtypid
+        WHERE t.typname = $1;
+      `,
+        [col.udt_name]
+      );
+      if (enumRes?.rows?.length > 0) {
+        const values = enumRes.rows.map((r) => `"${r.enumlabel}"`).join(" | ");
+        tsType = values;
+      }
+
+      // Nullability
+      if (!col.not_null) tsType += " | null";
+
+      // Optional inline JSDoc with description
+      const comment = col.description
+        ? `  /** ${col.description.trim()} */\n`
+        : "";
+      fieldStrings.push(`${comment}  ${col.column_name}: ${tsType};`);
+    }
+
+    typeDefs += `
+export type ${pascalCase(table_name)}_Type = {
+${fieldStrings.join("\n")}
 };
-    `;
+`;
   }
 
-  // Create a DatabaseSchema type that includes every table type.
-  typeDefinitions += `
+  // Schema aggregator
+  typeDefs += `
 export type DatabaseSchema = {
   ${tables.rows
-    .map((row) => `${row.table_name}: ${capitalize(row.table_name)}_Type`)
+    .map((row) => `${row.table_name}: ${pascalCase(row.table_name)}_Type`)
     .join(";\n  ")}
 };
 export type DatabaseSchemaKeys = keyof DatabaseSchema;
 `;
 
   const typeFilePath = path.resolve(outPath, "./generated-types.ts");
-  fs.writeFileSync(typeFilePath, typeDefinitions, "utf8");
+  await fs.writeFile(typeFilePath, typeDefs, "utf8");
+  console.log(`✅ Types written to ${typeFilePath}`);
 }
 
-/**
- * Generates TypeScript types for every function in the public schema.
- *
- * @param client - The PostgreSQL client.
- * @param outPath - The directory where the generated file should be saved.
- */
+/* ----------------------------------------------
+ * Core: Generate function types
+ * ---------------------------------------------- */
 export async function generateFunctionTypes(
   client: Client,
-  outPath: string
+  outPath: string,
+  schema = "public"
 ): Promise<void> {
-  const functions = await listUserFunctions(client);
-
-  let typeDefinitions = "// Auto-generated types from database functions\n";
+  const functions = await listUserFunctions(client, schema);
+  let typeDefs = "// Auto-generated types from database functions\n";
 
   for (const func of functions) {
     const { function_name, args, return_type, returns_set } = func;
+    if (return_type === "void") continue;
 
-    // Skip functions that do not return anything
-    if (return_type === "void" || return_type === "record") {
-      continue;
-    }
-
-    // Parse arguments
     const params = args
       .split(", ")
       .map((arg) => {
-        const [paramName, paramType] = arg.split(" ");
-
-        if (!paramName || !paramType) {
-          return null;
-        }
+        const match = arg.match(/^(\w+)\s+(VARIADIC\s+)?(\S+)/);
+        const paramName = match?.[1];
+        const paramType = match?.[3];
+        if (!paramName || !paramType) return null;
         const tsType = mapPostgresTypeByName(paramType);
         return `  ${paramName}: ${tsType};`;
       })
-      .filter((param) => param !== null)
+      .filter(Boolean)
       .join("\n");
 
-    // Parse return type
-    const returnTsType = await getReturnTypeFromList(return_type, returns_set);
+    const returnTsType = await getReturnTypeFromList(
+      client,
+      return_type,
+      returns_set
+    );
 
-    // Generate TypeScript types for the function
-    typeDefinitions += `
-export type ${capitalize(function_name)}_Params = ${
-      params.trim() === ""
-        ? "never"
-        : `{
-${params}
-};`
-    }
-
-export type ${capitalize(function_name)}_Return = ${returnTsType};
-    `;
+    typeDefs += `
+export type ${pascalCase(func.function_name)}_Params = ${
+      params.trim() === "" ? "never" : `{\n${params}\n}`
+    };
+export type ${pascalCase(func.function_name)}_Return = ${returnTsType};
+`;
   }
 
-  // Write the generated types to a file
-  const outFilePath = path.resolve(outPath, "./generated-function-types.ts");
-  fs.writeFileSync(outFilePath, typeDefinitions, "utf8");
+  const filePath = path.resolve(outPath, "./generated-function-types.ts");
+  await fs.writeFile(filePath, typeDefs, "utf8");
+  console.log(`✅ Function types written to ${filePath}`);
 }
 
-/**
- * Generates TypeScript functions for every PostgreSQL function in the public schema.
- *
- * @param client - The PostgreSQL client.
- * @param outPath - The directory where the generated file should be saved.
- */
+/* ----------------------------------------------
+ * Core: Generate SQL helpers
+ * ---------------------------------------------- */
 export async function generateTypeSafeFunctions(
   client: Client,
-  outPath: string
+  outPath: string,
+  schema = "public"
 ): Promise<void> {
-  const functions = await listUserFunctions(client);
-
-  let functionDefinitions =
-    "// Auto-generated TypeScript functions for PostgreSQL\n";
+  const functions = await listUserFunctions(client, schema);
+  let defs = "// Auto-generated SQL helpers for PostgreSQL functions\n";
 
   for (const func of functions) {
     const { function_name, args } = func;
-
-    // Parse arguments
-    const params = args
+    const argList = args
       .split(", ")
-      .map((arg, index) => {
-        const [_, paramType] = arg.split(" ");
-        const tsType = mapPostgresTypeByName(paramType);
-        return `param${index + 1}: ${tsType}`;
+      .map((arg, i) => {
+        const match = arg.match(/^(\w+)/);
+        const name = match?.[1] || `param${i + 1}`;
+        return name;
       })
-      .join(", ");
+      .filter(Boolean);
 
-    const paramPlaceholders = args
-      .split(", ")
-      .map((_, index) => `$${index + 1}`) // Use positional placeholders
-      .join(", ");
+    const paramsDef = argList.map((p) => `${p}: any`).join(", ");
+    const placeholders = argList.map((_, i) => `$${i + 1}`).join(", ");
 
-    // Generate TypeScript function
-    functionDefinitions += `
-export function ${function_name}(${params}): { sql: string; params: any[] } {
-  const sql = \`SELECT * FROM ${function_name}(${paramPlaceholders})\`;
-  const paramsArray = [${args
-    .split(", ")
-    .map((_, index) => `param${index + 1}`)
-    .join(", ")}];
-  return { sql, params: paramsArray };
+    defs += `
+export function ${function_name}(${paramsDef}): { sql: string; params: any[] } {
+  const sql = \`SELECT * FROM ${schema}.${function_name}(${placeholders})\`;
+  const params = [${argList.join(", ")}];
+  return { sql, params };
 }
 `;
   }
 
-  // Write the generated functions to a file
-  const outFilePath = path.resolve(outPath, "./generated-functions.ts");
-  fs.writeFileSync(outFilePath, functionDefinitions, "utf8");
+  const filePath = path.resolve(outPath, "./generated-functions.ts");
+  await fs.writeFile(filePath, defs, "utf8");
+  console.log(`✅ SQL helpers written to ${filePath}`);
 }
 
-function generateQuery(functionName: string, params: string[]): string {
-  if (params.length === 0) {
-    return `SELECT * FROM ${functionName}()`;
-  }
-
-  const paramPlaceholders = params
-    .map((param) => `\${params.${param}}`) // Use the actual parameter names
-    .join(", ");
-
-  return `SELECT * FROM ${functionName}(${paramPlaceholders})`;
-}
-
-async function listUserFunctions(client: Client): Promise<PgUserFunction[]> {
+/* ----------------------------------------------
+ * Utility helpers
+ * ---------------------------------------------- */
+async function listUserFunctions(
+  client: Client,
+  schema = "public"
+): Promise<PgUserFunction[]> {
   const { rows } = await client.query(`
     SELECT
       n.nspname   AS schema,
       p.proname   AS function_name,
       pg_catalog.pg_get_function_arguments(p.oid)  AS args,
-      CASE
-        WHEN t.typtype = 'p' THEN
-          pg_catalog.pg_get_function_result(p.oid)
-        ELSE
-          pg_catalog.format_type(p.prorettype, NULL)
-      END AS return_type,
+      pg_catalog.pg_get_function_result(p.oid)     AS return_type,
       p.proretset AS returns_set
     FROM pg_catalog.pg_proc p
       JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
-      JOIN pg_catalog.pg_type t      ON t.oid = p.prorettype
-    WHERE
-      n.nspname NOT IN ('pg_catalog','information_schema')
+    WHERE n.nspname = '${schema}'
       AND pg_catalog.pg_function_is_visible(p.oid)
     ORDER BY schema, function_name;
   `);
@@ -366,28 +331,24 @@ async function listUserFunctions(client: Client): Promise<PgUserFunction[]> {
 }
 
 async function getReturnTypeFromList(
+  client: Client,
   returnType: string,
   returnsSet: boolean
 ): Promise<string> {
   if (returnType.startsWith("TABLE(")) {
-    // Extract the columns from the TABLE definition
     const columns = returnType
-      .replace("TABLE(", "")
-      .replace(")", "")
+      .replace(/^TABLE\(/, "")
+      .replace(/\)$/, "")
       .split(", ")
       .map((col) => {
-        const [columnName, columnType] = col.split(" ");
-        const tsType = mapPostgresTypeByName(columnType);
-        return `  ${columnName}: ${tsType};`;
+        const [name, type] = col.split(" ");
+        const tsType = mapPostgresTypeByName(type);
+        return `  ${name}: ${tsType};`;
       })
       .join("\n");
-
-    return `{
-${columns}
-}${returnsSet ? "[]" : ""}`;
+    return `{\n${columns}\n}${returnsSet ? "[]" : ""}`;
   }
 
-  // Handle scalar return types
   const tsType = mapPostgresTypeByName(returnType);
   return returnsSet ? `${tsType}[]` : tsType;
 }

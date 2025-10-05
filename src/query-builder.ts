@@ -808,6 +808,7 @@ class UpdateQueryBuilder<
 > {
   private table: T;
   private setClause: Partial<DB[T]>;
+  private allowUnsafe: boolean = false;
   private wheres: WhereClause<DB[T]>[] = [];
   private returningColumns?: (keyof DB[T])[];
   private batchUpdates?: { where: Partial<DB[T]>; set: Partial<DB[T]> }[];
@@ -815,6 +816,16 @@ class UpdateQueryBuilder<
   constructor(table: T, setClause: Partial<DB[T]>) {
     this.table = table;
     this.setClause = setClause;
+  }
+
+  /**
+   * Allow unsafe updates without a WHERE clause.
+   * This is not recommended for production use.
+   */
+  allowUnsafeUpdate(): this {
+    this.wheres = [];
+    this.allowUnsafe = true;
+    return this;
   }
 
   /**
@@ -882,40 +893,85 @@ class UpdateQueryBuilder<
   toSQL(): QueryResult<R> {
     const table = String(this.table);
 
-    if (this.wheres.length === 0 && !this.batchUpdates) {
+    if (!this.allowUnsafe && this.wheres.length === 0 && !this.batchUpdates) {
       throw new Error(
         "WHERE clause is required for UPDATE or DELETE operations."
       );
     }
 
     let params: any[] = [];
-    const setParts = Object.entries(this.setClause).map(([col, val]) => {
-      params.push(val);
-      return `${col} = $${params.length}`;
-    });
-    const whereParts = this.wheres.map((w) => {
-      params.push(w.value);
-      return `${String(w.column)} ${w.operator} $${params.length}`;
-    });
-
-    let sql = `UPDATE ${table} SET ${setParts.join(", ")}`;
+    let sql = `UPDATE ${table}`;
 
     if (this.batchUpdates) {
-      const cases = this.batchUpdates
-        .map(
-          (update) =>
-            `WHEN ${Object.entries(update.where)
-              .map(([col, val]) => `${col} = $${params.push(val)}`)
-              .join(" AND ")} THEN ${Object.entries(update.set)
-              .map(([col, val]) => `${col} = $${params.push(val)}`)
-              .join(", ")}`
+      // Extract columns to update
+      const updateColumns = new Set<string>();
+      this.batchUpdates.forEach((update) => {
+        Object.keys(update.set).forEach((col) => updateColumns.add(col));
+      });
+
+      // Generate SET clause with CASE expressions
+      const setClause = Array.from(updateColumns)
+        .map((col) => {
+          const cases = (this.batchUpdates || [])
+            .map(
+              (update) =>
+                `WHEN ${Object.entries(update.where)
+                  .map(([whereCol, whereVal]) => {
+                    params.push(whereVal);
+                    return `${whereCol} = $${params.length}`;
+                  })
+                  .join(" AND ")} THEN $${params.push(update.set[col])}`
+            )
+            .join(" ");
+          return `${col} = CASE ${cases} ELSE ${col} END`;
+        })
+        .join(", ");
+
+      sql += ` SET ${setClause}`;
+
+      // Generate WHERE clause to limit updates to relevant rows
+      const whereConditions = this.batchUpdates
+        .map((update) =>
+          Object.entries(update.where)
+            .map(([col, val]) => {
+              params.push(val);
+              return `${col} = $${params.length}`;
+            })
+            .join(" AND ")
         )
-        .join(" ");
-      sql += ` SET ${cases}`;
+        .join(" OR ");
+      sql += ` WHERE ${whereConditions}`;
+    } else {
+      // Handle regular updates
+      const setParts = Object.entries(this.setClause).map(([col, val]) => {
+        params.push(val);
+        return `${col} = $${params.length}`;
+      });
+
+      sql += ` SET ${setParts.join(", ")}`;
+
+      const whereParts = this.wheres.map((w) => {
+        if (w.operator === "IN" && Array.isArray(w.value)) {
+          if (w.value.length === 0) {
+            throw new Error(
+              `Invalid value for WHERE clause: IN operator requires a non-empty array`
+            );
+          }
+
+          // Use = ANY for IN operator
+          params.push(w.value);
+          return `${String(w.column)} = ANY($${params.length})`;
+        } else {
+          params.push(w.value);
+          return `${String(w.column)} ${w.operator} $${params.length}`;
+        }
+      });
+
+      if (whereParts.length) {
+        sql += ` WHERE ${whereParts.join(" AND ")}`;
+      }
     }
-    if (whereParts.length) {
-      sql += ` WHERE ${whereParts.join(" AND ")}`;
-    }
+
     if (this.returningColumns) {
       sql += ` RETURNING ${this.returningColumns.join(", ")}`;
     }
@@ -1018,9 +1074,25 @@ class DeleteQueryBuilder<
 
     let params: any[] = [];
     const whereParts = this.wheres.map((w) => {
-      params.push(w.value);
-      return `${String(w.column)} ${w.operator} $${params.length}`;
+      if (w.operator === "IN" && Array.isArray(w.value)) {
+        if (w.value.length === 0) {
+          throw new Error(
+            `Invalid value for WHERE clause: IN operator requires a non-empty array`
+          );
+        }
+
+        const placeholders = w.value.map(
+          (_, index) => `$${params.length + index + 1}`
+        );
+        params.push(...w.value);
+        return `${String(w.column)} ${w.operator} (${placeholders.join(", ")})`;
+      } else {
+        params.push(w.value);
+        const placeholder = `$${params.length}`;
+        return `${String(w.column)} ${w.operator} ${placeholder}`;
+      }
     });
+
     let sql = `DELETE FROM ${table}`;
     if (whereParts.length) {
       sql += ` WHERE ${whereParts.join(" AND ")}`;

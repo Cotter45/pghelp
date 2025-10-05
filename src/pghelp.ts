@@ -288,17 +288,17 @@ function printHelp(): void {
 Usage: pghelp [--action <action>] [options]
 
 Available Actions:
-  setup            - Setup a local database.
-  dump             - Dump the database schema to a file.
-  create           - Create a new migration file.
-  run              - Run all pending migrations.
-  revert           - Revert the last migration(s).
-  gentypes         - Generate TypeScript types from the database schema.
-  genfunctypes     - Generate TypeScript types for database functions.
-  genschema        - Generate a Zod schema from the database schema.
-  genfunctions     - Generate TypeScript functions for database queries.
-  config           - Update the configuration interactively.
-  help             - Show this help message.
+  setup              - Setup a local database.
+  dump               - Dump the database schema to a file.
+  create             - Create a new migration file.
+  run                - Run all pending migrations.
+  revert             - Revert the last migration(s).
+  gentypes           - Generate TypeScript types from the database schema.
+  genfunctypes       - Generate TypeScript types for database functions.
+  genschema          - Generate a Zod schema from the database schema.
+  genfunctions       - Generate TypeScript functions for database queries.
+  config             - Update the configuration interactively.
+  help               - Show this help message.
 
 Options:
   --action             - Specify the action to perform.
@@ -350,10 +350,6 @@ async function main(): Promise<void> {
         { value: "gentypes", label: "Generate types" },
         { value: "genfunctypes", label: "Generate function types" },
         { value: "genschema", label: "Generate Zod schema" },
-        {
-          value: "genoptionalschema",
-          label: "Generate Zod schema (make everything optional)",
-        },
         { value: "genfunctions", label: "Generate Typescript functions" },
       ],
     });
@@ -586,40 +582,72 @@ async function main(): Promise<void> {
       s.stop("Functions generated.");
     } else if (action === "genschema") {
       const s = spinner();
-      s.start("Generating Zod schema...");
+      s.start("Preparing to generate Zod schema...");
 
-      // check if types exists, if not create it
       const typesPath = path.join(absPath, "../types");
+      const outPath = path.join(absPath, "../schema");
+
+      // Ensure types directory exists and is up to date
       if (!fs.existsSync(typesPath)) {
         fs.mkdirSync(typesPath, { recursive: true });
         await generateTypes(client!, typesPath);
       }
 
-      // check if schema exists, if not create it
-      const outPath = path.join(absPath, "../schema");
       if (!fs.existsSync(outPath)) {
         fs.mkdirSync(outPath, { recursive: true });
       }
-      await generateSchema(outPath);
-      s.stop("Zod schema generated.");
-    } else if (action === "genoptionalschema") {
-      const s = spinner();
-      s.start("Generating Zod schema...");
 
-      // check if types exists, if not create it
-      const typesPath = path.join(absPath, "../types");
-      if (!fs.existsSync(typesPath)) {
-        fs.mkdirSync(typesPath, { recursive: true });
-        await generateTypes(client!, typesPath);
+      s.stop("Ready to configure schema generation.");
+
+      // --- NEW interactive step ---
+      const forceOptional =
+        (await select({
+          message: "Should all fields be optional?",
+          options: [
+            { value: true, label: "Yes, make all fields optional" },
+            { value: false, label: "No, keep original optionality" },
+          ],
+        })) ?? false;
+
+      if (isCancel(forceOptional)) {
+        log.error("Cancelled");
+        process.exit(0);
       }
 
-      // check if schema exists, if not create it
-      const outPath = path.join(absPath, "../schema");
-      if (!fs.existsSync(outPath)) {
-        fs.mkdirSync(outPath, { recursive: true });
+      const useCoerceDates = await select({
+        message: "How should Date fields be handled?",
+        options: [
+          {
+            value: false,
+            label: "As strings (z.string()) — good for DB/API responses",
+          },
+          {
+            value: true,
+            label:
+              "Coerce into JS Dates (z.coerce.date()) — good for app-level validation",
+          },
+        ],
+      });
+
+      if (isCancel(useCoerceDates)) {
+        log.error("Cancelled");
+        process.exit(0);
       }
-      await generateSchema(outPath, true);
-      s.stop("Zod schema generated.");
+
+      const s2 = spinner();
+      s2.start("Generating Zod schema...");
+
+      await generateSchema(outPath, forceOptional, useCoerceDates);
+
+      s2.stop(
+        `Zod schema generated successfully with${
+          forceOptional ? " forced optional fields" : " original optionality"
+        } and ${
+          useCoerceDates
+            ? "z.coerce.date() for Date fields"
+            : "z.string() for Date fields"
+        }.`
+      );
     }
   } catch (error: any) {
     log.error("An error occurred: " + error);

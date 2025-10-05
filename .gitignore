@@ -7,4 +7,5 @@ pghelp_config.json
 db
 dist
 src/db
+coverage
 node_modules

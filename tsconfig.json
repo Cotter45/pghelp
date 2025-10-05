@@ -12,5 +12,5 @@
     "strict": true,
     "types": ["node", "jest"]
   },
-  "exclude": ["src/tests", "dist", "src/db"]
+  "exclude": ["src/tests", "dist", "db"]
 }
