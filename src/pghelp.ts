@@ -584,70 +584,67 @@ async function main(): Promise<void> {
       const s = spinner();
       s.start("Preparing to generate Zod schema...");
 
+      // Ensure type folder exists or generate it
       const typesPath = path.join(absPath, "../types");
-      const outPath = path.join(absPath, "../schema");
-
-      // Ensure types directory exists and is up to date
       if (!fs.existsSync(typesPath)) {
         fs.mkdirSync(typesPath, { recursive: true });
         await generateTypes(client!, typesPath);
       }
 
+      // Ensure schema folder exists
+      const outPath = path.join(absPath, "../schema");
       if (!fs.existsSync(outPath)) {
         fs.mkdirSync(outPath, { recursive: true });
       }
 
-      s.stop("Ready to configure schema generation.");
+      s.stop("Ready.");
 
-      // --- NEW interactive step ---
-      const forceOptional =
-        (await select({
-          message: "Should all fields be optional?",
-          options: [
-            { value: true, label: "Yes, make all fields optional" },
-            { value: false, label: "No, keep original optionality" },
-          ],
-        })) ?? false;
-
+      // Prompt for schema generation options
+      const forceOptional = await select({
+        message: "Should all fields be forced optional?",
+        options: [
+          { value: true, label: "Yes — make all fields optional" },
+          { value: false, label: "No — use type definition optionality" },
+        ],
+      });
       if (isCancel(forceOptional)) {
         log.error("Cancelled");
         process.exit(0);
       }
 
       const useCoerceDates = await select({
-        message: "How should Date fields be handled?",
+        message: "Should Date fields use z.coerce.date()?",
         options: [
-          {
-            value: false,
-            label: "As strings (z.string()) — good for DB/API responses",
-          },
-          {
-            value: true,
-            label:
-              "Coerce into JS Dates (z.coerce.date()) — good for app-level validation",
-          },
+          { value: true, label: "Yes — coerce date strings to Date objects" },
+          { value: false, label: "No — treat them as strings" },
         ],
       });
-
       if (isCancel(useCoerceDates)) {
+        log.error("Cancelled");
+        process.exit(0);
+      }
+
+      const addDefaultNull = await select({
+        message: "Add default(null) for nullable fields?",
+        options: [
+          { value: true, label: "Yes — make nullable fields default to null" },
+          { value: false, label: "No — leave them undefined if missing" },
+        ],
+      });
+      if (isCancel(addDefaultNull)) {
         log.error("Cancelled");
         process.exit(0);
       }
 
       const s2 = spinner();
       s2.start("Generating Zod schema...");
-
-      await generateSchema(outPath, forceOptional, useCoerceDates);
-
-      s2.stop(
-        `Zod schema generated successfully with${
-          forceOptional ? " forced optional fields" : " original optionality"
-        } and ${
-          useCoerceDates
-            ? "z.coerce.date() for Date fields"
-            : "z.string() for Date fields"
-        }.`
+      await generateSchema(
+        outPath,
+        forceOptional,
+        useCoerceDates,
+        addDefaultNull
       );
+      s2.stop("Zod schema generated.");
     }
   } catch (error: any) {
     log.error("An error occurred: " + error);

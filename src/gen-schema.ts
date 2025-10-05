@@ -229,7 +229,8 @@ function splitTopLevel(input: string, delimiter: string): string[] {
 function generateZodSchemas(
   types: Record<string, string>,
   forceOptional = false,
-  useCoerceDates = false
+  useCoerceDates = false,
+  addDefaultNull = false
 ): Record<string, string> {
   const zodSchemas: Record<string, string> = {};
 
@@ -254,7 +255,10 @@ function generateZodSchemas(
 
       const base = mapToZodType(cleaned, knownTypeNames, useCoerceDates);
       let finalType = base;
-      if (isNullable) finalType += ".nullable()";
+      if (isNullable) {
+        finalType += ".nullable()";
+        if (addDefaultNull) finalType += ".default(null)";
+      }
       if (f.optional || forceOptional) finalType += ".optional()";
 
       zFields.push(`  ${f.name}: ${finalType}`);
@@ -375,7 +379,8 @@ function mapToZodType(
     case "number":
       return "z.number()";
     case "bigint":
-      return "z.bigint()";
+      // Store bigints as strings for JSON compatibility
+      return "z.string().refine(v => /^-?\\d+$/.test(v), { message: 'Invalid bigint string' })";
     case "boolean":
       return "z.boolean()";
     case "Date":
@@ -442,13 +447,19 @@ function writeZodSchemasToFile(
 export async function generateSchema(
   outPath: string,
   forceOptional = false, // if true, marks ALL fields optional (override mode)
-  useCoerceDates = false // new flag
+  useCoerceDates = false, // if true, maps Date to z.coerce.date() instead of z.string()
+  addDefaultNull = false // if true, adds "| null" to all fields (override mode)
 ): Promise<void> {
   const typesFilePath = path.resolve(outPath, "../types/generated-types.ts");
   const outputFilePath = path.resolve(outPath, "generated-schemas.ts");
 
   const types = extractTypesFromFile(typesFilePath);
-  const zodSchemas = generateZodSchemas(types, forceOptional, useCoerceDates);
+  const zodSchemas = generateZodSchemas(
+    types,
+    forceOptional,
+    useCoerceDates,
+    addDefaultNull
+  );
   writeZodSchemasToFile(zodSchemas, outputFilePath);
 }
 

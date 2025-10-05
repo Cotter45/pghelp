@@ -12,13 +12,13 @@ import type { PgUserFunction } from "./types";
 function mapPostgresTypeByName(dataType: string): string {
   const typeMap: Record<string, string> = {
     integer: "number",
-    bigint: "bigint",
+    bigint: "string",
     smallint: "number",
     numeric: "number",
     real: "number",
     "double precision": "number",
     serial: "number",
-    bigserial: "bigint",
+    bigserial: "string",
     smallserial: "number",
     money: "string",
     "character varying": "string",
@@ -63,7 +63,7 @@ function mapPostgresTypeByName(dataType: string): string {
 
 const oidMap: Record<number, string> = {
   16: "boolean",
-  20: "bigint",
+  20: "string",
   21: "number",
   23: "number",
   700: "number",
@@ -96,7 +96,7 @@ const oidMap: Record<number, string> = {
   718: "{ x: number, y: number, r: number }",
   3904: "{ lower: number, upper: number }",
   3912: "{ lower: string, upper: string }",
-  3926: "{ lower: bigint, upper: bigint }",
+  3926: "{ lower: string, upper: string }",
   3613: "string",
   869: "string",
   650: "string",
