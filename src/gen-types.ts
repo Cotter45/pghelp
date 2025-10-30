@@ -178,15 +178,17 @@ export async function generateTypes(
       // Detect enum types
       const enumRes = await client.query<{ enumlabel: string }>(
         `
-        SELECT e.enumlabel
-        FROM pg_type t
-        JOIN pg_enum e ON t.oid = e.enumtypid
-        WHERE t.typname = $1;
-      `,
+          SELECT DISTINCT e.enumlabel
+          FROM pg_type t
+          JOIN pg_enum e ON t.oid = e.enumtypid
+          WHERE t.typname = $1;
+        `,
         [col.udt_name]
       );
+
       if (enumRes?.rows?.length > 0) {
-        const values = enumRes.rows.map((r) => `"${r.enumlabel}"`).join(" | ");
+        const uniqueValues = [...new Set(enumRes.rows.map((r) => r.enumlabel))];
+        const values = uniqueValues.map((v) => `"${v}"`).join(" | ");
         tsType = values;
       }
 

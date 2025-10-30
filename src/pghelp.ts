@@ -15,7 +15,7 @@
  */
 
 import dotenv from "dotenv";
-dotenv.config();
+dotenv.config({ quiet: true });
 
 import fs from "fs";
 import path from "path";
@@ -93,7 +93,7 @@ async function checkAndPromptForDbUrl(): Promise<string> {
       );
       process.exit(0);
     }
-    dotenv.config({ path: envFilePath });
+    dotenv.config({ path: envFilePath, quiet: true });
   } else {
     log.success(`Loaded .env file at ${envFilePath}`);
   }
@@ -121,7 +121,7 @@ async function checkAndPromptForDbUrl(): Promise<string> {
       log.error("Error writing .env file: " + err);
       process.exit(0);
     }
-    dotenv.config({ path: envFilePath });
+    dotenv.config({ path: envFilePath, quiet: true });
     return dbUrl;
   } else {
     log.success(`Using Postgres database URL from .env at ${envFilePath}`);
@@ -598,11 +598,11 @@ async function main(): Promise<void> {
 
   let schemas: string[] = [];
 
-  if (client) {
+  if (client && !parsedArgs.schemas) {
     // 🔹 Automatically sync schemas from database
     config.schemas = (await syncSchemasFromDatabase(client, config)).schemas;
     schemas = getSchemas(config);
-  } else {
+  } else if (!parsedArgs.schemas) {
     schemas = config.schemas || ["public"];
   }
 
