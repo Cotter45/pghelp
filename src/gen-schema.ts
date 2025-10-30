@@ -410,28 +410,31 @@ function mapToZodType(
 
 /**
  * Writes generated Zod schemas and inferred types to a file.
+ * Adds schema prefix to differentiate between identical names across schemas.
  */
 function writeZodSchemasToFile(
   zodSchemas: Record<string, string>,
-  outputPath: string
+  outputPath: string,
+  schemaName?: string
 ): void {
   const importZod = `import { z } from "zod";\n\n`;
+  const suffix = schemaName ? `_${schemaName}` : "";
 
   const schemas = Object.entries(zodSchemas)
-    .map(
-      ([typeName, schema]) =>
-        `export const ${typeName.replace(/_Type$/, "")}_Schema = ${schema};`
-    )
+    .map(([typeName, schema]) => {
+      const baseName = typeName.replace(/_Type$/, "");
+      const schemaConst = `${baseName}${suffix}_Schema`;
+      return `export const ${schemaConst} = ${schema};`;
+    })
     .join("\n\n");
 
   const inferred = Object.keys(zodSchemas)
-    .map(
-      (typeName) =>
-        `export type ${typeName.replace(
-          /_Type$/,
-          ""
-        )} = z.infer<typeof ${typeName.replace(/_Type$/, "")}_Schema>;`
-    )
+    .map((typeName) => {
+      const baseName = typeName.replace(/_Type$/, "");
+      const schemaConst = `${baseName}${suffix}_Schema`;
+      const typeNameWithSuffix = `${baseName}${suffix}`;
+      return `export type ${typeNameWithSuffix} = z.infer<typeof ${schemaConst}>;`;
+    })
     .join("\n");
 
   fs.writeFileSync(
@@ -446,21 +449,71 @@ function writeZodSchemasToFile(
  */
 export async function generateSchema(
   outPath: string,
-  forceOptional = false, // if true, marks ALL fields optional (override mode)
-  useCoerceDates = false, // if true, maps Date to z.coerce.date() instead of z.string()
-  addDefaultNull = false // if true, adds "| null" to all fields (override mode)
+  forceOptional = false,
+  useCoerceDates = false,
+  addDefaultNull = false,
+  schemas: string[] = ["public"]
 ): Promise<void> {
-  const typesFilePath = path.resolve(outPath, "../types/generated-types.ts");
-  const outputFilePath = path.resolve(outPath, "generated-schemas.ts");
+  for (const schema of schemas) {
+    const typesDir =
+      schemas.length > 1
+        ? path.resolve(outPath, `../types/${schema}`)
+        : path.resolve(outPath, "../types");
 
-  const types = extractTypesFromFile(typesFilePath);
-  const zodSchemas = generateZodSchemas(
-    types,
-    forceOptional,
-    useCoerceDates,
-    addDefaultNull
-  );
-  writeZodSchemasToFile(zodSchemas, outputFilePath);
+    const typesFilePath = path.join(typesDir, "generated-types.ts");
+    if (!fs.existsSync(typesFilePath)) {
+      console.warn(
+        `⚠️  No types found for schema "${schema}" at ${typesFilePath}`
+      );
+      continue;
+    }
+
+    const schemaOutDir =
+      schemas.length > 1 ? path.join(outPath, schema) : outPath;
+    fs.mkdirSync(schemaOutDir, { recursive: true });
+
+    const outputFilePath = path.join(schemaOutDir, "generated-schemas.ts");
+
+    console.log(`🧩 Generating Zod schemas for "${schema}"...`);
+
+    const types = extractTypesFromFile(typesFilePath);
+    const zodSchemas = generateZodSchemas(
+      types,
+      forceOptional,
+      useCoerceDates,
+      addDefaultNull
+    );
+    writeZodSchemasToFile(zodSchemas, outputFilePath);
+
+    console.log(
+      `✅ Wrote ${Object.keys(zodSchemas).length} schemas → ${outputFilePath}`
+    );
+  }
+}
+
+/**
+ * Generates an index.ts that exports all schema files.
+ * Example output for multiple schemas:
+ *   export * from "./us/generated-schemas";
+ *   export * from "./canada/generated-schemas";
+ */
+export async function generateSchemaIndex(
+  schemaRoot: string,
+  schemas: string[]
+): Promise<void> {
+  const lines: string[] = [];
+
+  for (const schema of schemas) {
+    const subdir =
+      schemas.length > 1
+        ? `./${schema}/generated-schemas`
+        : `./generated-schemas`;
+    lines.push(`export * from "${subdir}";`);
+  }
+
+  const outFile = path.join(schemaRoot, "index.ts");
+  fs.writeFileSync(outFile, lines.join("\n") + "\n", "utf8");
+  console.log(`📦 Wrote schema index → ${outFile}`);
 }
 
 export default generateSchema;

@@ -21,30 +21,30 @@ import fs from "fs";
 import path from "path";
 import { Client } from "pg";
 import minimist from "minimist";
-import { promisify } from "util";
 import fsPromises from "fs/promises";
-import { exec } from "child_process";
 import { log, text, select, isCancel, spinner } from "@clack/prompts";
 
-import { generateSchema } from "./gen-schema";
+import { generateSchema, generateSchemaIndex } from "./gen-schema";
 import { runMigrations } from "./run-migration";
 import { createMigration } from "./create-migration";
 import {
   generateFunctionTypes,
   generateTypes,
   generateTypeSafeFunctions,
+  generateTypesIndex,
 } from "./gen-types";
 
 import type { Action, Config } from "./types";
-
-// Promisify exec for async/await usage.
-const execPromise = promisify(exec);
+import { dumpSchema, dumpSchemaViaNodePg } from "./node-dump";
+import { setupDatabase } from "./setup";
+import { verifySchemas } from "./verify";
 
 // Default configuration values.
 const baseConfig: Config = {
   migrationsDir: "migrations",
   migrationPath: "db",
   migrationsTable: "migrations",
+  schemas: ["public"],
 };
 
 /**
@@ -134,6 +134,11 @@ async function checkAndPromptForDbUrl(): Promise<string> {
  *
  * @returns A Config object with the provided values.
  */
+/**
+ * Prompts the user for configuration details (migration path, migrations directory, table name, schemas).
+ *
+ * @returns A Config object with the provided values.
+ */
 async function promptConfig(): Promise<Config> {
   const migrationPath = await text({
     message: "Enter base migration path:",
@@ -164,12 +169,28 @@ async function promptConfig(): Promise<Config> {
     process.exit(0);
   }
 
+  // 🔹 Ask for schemas (comma-separated)
+  const schemasInput = await text({
+    message: "Enter schemas (comma-separated):",
+    initialValue: (baseConfig.schemas ?? ["public"]).join(", "),
+  });
+  if (isCancel(schemasInput)) {
+    log.error("Cancelled");
+    process.exit(0);
+  }
+
+  const schemas = schemasInput
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+
   return {
     migrationPath: path.isAbsolute(migrationPath)
       ? migrationPath
       : path.resolve(migrationPath),
     migrationsDir,
     migrationsTable,
+    schemas: schemas.length > 0 ? schemas : ["public"],
   };
 }
 
@@ -180,7 +201,7 @@ async function promptConfig(): Promise<Config> {
  * @returns A Config object.
  */
 async function loadConfig(parsedArgs: Record<string, string>): Promise<Config> {
-  let config: Config = baseConfig;
+  let config: Config = { ...baseConfig };
 
   if (fs.existsSync(configFile)) {
     try {
@@ -190,7 +211,7 @@ async function loadConfig(parsedArgs: Record<string, string>): Promise<Config> {
     } catch (error) {
       log.warn("Error reading config file. Let's set it up.");
       config = await promptConfig();
-      fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+      await fsPromises.writeFile(configFile, JSON.stringify(config, null, 2));
     }
   } else {
     const migrationPath = parsedArgs["migration-path"];
@@ -208,14 +229,55 @@ async function loadConfig(parsedArgs: Record<string, string>): Promise<Config> {
     } else {
       log.warn("Config file not found. Let's set it up.");
       config = await promptConfig();
-      fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+      await fsPromises.writeFile(configFile, JSON.stringify(config, null, 2));
     }
   }
+
+  // 🔹 Normalize schemas support (non-breaking)
+  if (
+    !config.schemas ||
+    !Array.isArray(config.schemas) ||
+    config.schemas.length === 0
+  ) {
+    config.schemas = ["public"];
+  }
+
+  // 🔹 Allow overriding schemas via CLI flag (--schemas us,canada)
+  if (parsedArgs.schemas) {
+    const parsedSchemas = String(parsedArgs.schemas)
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    if (parsedSchemas.length > 0) {
+      config.schemas = parsedSchemas;
+    }
+  }
+
+  // 🔹 Always normalize to lowercase for Postgres safety
+  config.schemas = config.schemas.map((s) => s.toLowerCase());
+
   return config;
 }
 
 /**
+ * Returns the list of schemas to operate on based on the configuration.
+ *
+ * @param config - The configuration object.
+ * @returns An array of schema names.
+ */
+function getSchemas(config: Config): string[] {
+  return config.schemas && config.schemas.length > 0
+    ? config.schemas
+    : ["public"];
+}
+
+/**
  * Updates the configuration interactively.
+ *
+ * @param configFile - The path to the configuration file.
+ */
+/**
+ * Updates the configuration interactively, including schemas.
  *
  * @param configFile - The path to the configuration file.
  */
@@ -227,7 +289,7 @@ async function updateConfig(configFile: string): Promise<void> {
     try {
       const configContent = await fsPromises.readFile(configFile, "utf8");
       currentConfig = { ...baseConfig, ...JSON.parse(configContent) };
-    } catch (error) {
+    } catch {
       log.warn("Error reading existing config file. Starting fresh.");
     }
   }
@@ -236,28 +298,31 @@ async function updateConfig(configFile: string): Promise<void> {
     message: "Enter base migration path:",
     initialValue: currentConfig.migrationPath,
   });
-  if (isCancel(migrationPath)) {
-    log.error("Cancelled");
-    process.exit(0);
-  }
+  if (isCancel(migrationPath)) process.exit(0);
 
   const migrationsDir = await text({
     message: "Enter migrations directory name:",
     initialValue: currentConfig.migrationsDir,
   });
-  if (isCancel(migrationsDir)) {
-    log.error("Cancelled");
-    process.exit(0);
-  }
+  if (isCancel(migrationsDir)) process.exit(0);
 
   const migrationsTable = await text({
     message: "Enter migrations table name:",
     initialValue: currentConfig.migrationsTable,
   });
-  if (isCancel(migrationsTable)) {
-    log.error("Cancelled");
-    process.exit(0);
-  }
+  if (isCancel(migrationsTable)) process.exit(0);
+
+  // 🔹 Add schema editing
+  const schemasInput = await text({
+    message: "Enter schemas (comma-separated):",
+    initialValue: (currentConfig.schemas ?? ["public"]).join(", "),
+  });
+  if (isCancel(schemasInput)) process.exit(0);
+
+  const schemas = schemasInput
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
 
   const updatedConfig: Config = {
     migrationPath: path.isAbsolute(migrationPath)
@@ -265,6 +330,7 @@ async function updateConfig(configFile: string): Promise<void> {
       : path.resolve(migrationPath),
     migrationsDir,
     migrationsTable,
+    schemas: schemas.length > 0 ? schemas : ["public"],
   };
 
   try {
@@ -278,6 +344,53 @@ async function updateConfig(configFile: string): Promise<void> {
     log.error("Failed to update configuration: " + error);
     process.exit(0);
   }
+}
+
+/**
+ * Queries the connected database for all non-system schemas
+ * and updates the config file if they differ from what's stored.
+ */
+async function syncSchemasFromDatabase(
+  client: Client,
+  config: Config
+): Promise<Config> {
+  const { rows } = await client.query(`
+    SELECT nspname AS schema_name
+    FROM pg_namespace
+    WHERE nspname NOT LIKE 'pg_%'
+      AND nspname NOT LIKE 'information_schema'
+      AND nspname NOT LIKE 'pg_toast%'
+      AND nspname NOT LIKE 'pg_temp%'
+      AND nspname NOT LIKE 'catalog%'
+      AND nspname NOT LIKE '_timescaledb%'
+      AND nspname NOT LIKE 'pglogical%'
+      AND nspname NOT LIKE 'repack%'
+      AND nspname != 'public'
+    ORDER BY nspname;
+  `);
+
+  const dbSchemas = rows.map((r) => r.schema_name.toLowerCase());
+  const existing = (config.schemas ?? []).map((s) => s.toLowerCase());
+
+  const areDifferent =
+    dbSchemas.length !== existing.length ||
+    dbSchemas.some((s) => !existing.includes(s));
+
+  if (areDifferent) {
+    log.info(
+      `Detected schema update in database. Syncing pghelp_config.json → [${dbSchemas.join(
+        ", "
+      )}]`
+    );
+    config.schemas = dbSchemas;
+    await fsPromises.writeFile(
+      configFile,
+      JSON.stringify(config, null, 2),
+      "utf8"
+    );
+  }
+
+  return config;
 }
 
 /**
@@ -297,10 +410,12 @@ Available Actions:
   genfunctypes       - Generate TypeScript types for database functions.
   genschema          - Generate a Zod schema from the database schema.
   genfunctions       - Generate TypeScript functions for database queries.
+  verify             - Compare schemas for drift (structure differences).
   config             - Update the configuration interactively.
   help               - Show this help message.
 
 Options:
+  --schemas            - Comma-separated list of schemas to include (default: "public").
   --action             - Specify the action to perform.
   --db-url             - Provide the database connection string.
   --migration-path     - Specify the base migration path (default: "db").
@@ -308,6 +423,8 @@ Options:
   --migrations-table   - Specify the migrations table name (default: "migrations").
   --migration, --name  - Specify the migration name (for "create").
   --revert             - Specify the number of migrations to revert (for "revert").
+  --verify             - Compare schemas for drift (structure differences).
+
 
 Examples:
   pghelp --action setup
@@ -315,6 +432,12 @@ Examples:
   pghelp --action revert --revert 1
   pghelp --action gentypes
   pghelp --action help
+
+Flags
+  --non-interactive    - Run in non-interactive mode (will error if prompts are needed).
+  --force-optional     - (for genschema) - Default: false. Force all fields to be optional.
+  --coerce-dates       - (for genschema) - Default: false. Use z.coerce.date() for Date fields.
+  --default-null       - (for genschema) - Default: true. Add default(null) for nullable fields.
 `);
 }
 
@@ -329,6 +452,12 @@ Examples:
  */
 async function main(): Promise<void> {
   const parsedArgs = minimist(process.argv.slice(2));
+
+  // Flags
+  const nonInteractiveFlag = parsedArgs["non-interactive"] ?? false;
+  const forceOptionalFlag = parsedArgs["force-optional"] ?? false;
+  const coerceDatesFlag = parsedArgs["coerce-dates"] ?? false;
+  const defaultNullFlag = parsedArgs["default-null"] ?? true;
 
   // Determine action from --action or first positional argument.
   let action: Action;
@@ -351,6 +480,7 @@ async function main(): Promise<void> {
         { value: "genfunctypes", label: "Generate function types" },
         { value: "genschema", label: "Generate Zod schema" },
         { value: "genfunctions", label: "Generate Typescript functions" },
+        { value: "verify", label: "Check for schema drift" },
       ],
     });
     if (isCancel(response)) {
@@ -438,34 +568,22 @@ async function main(): Promise<void> {
     }
   }
 
-  // Check if .gitignore in root
+  // Ensure .gitignore has pghelp_config.json and .env
   const gitignorePath = path.join(
     removePackagePath(process.env.INIT_CWD || process.cwd()),
     ".gitignore"
   );
-  if (fs.existsSync(gitignorePath)) {
-    const gitignoreContent = fs.readFileSync(gitignorePath, "utf8");
-    if (!gitignoreContent.includes("pghelp_config.json")) {
-      fs.appendFileSync(gitignorePath, "\npghelp_config.json\n");
-      log.success("Added pghelp_config.json to .gitignore");
+  const ensureIgnored = (entry: string) => {
+    const content = fs.existsSync(gitignorePath)
+      ? fs.readFileSync(gitignorePath, "utf8")
+      : "";
+    if (!content.includes(entry)) {
+      fs.appendFileSync(gitignorePath, `\n${entry}\n`);
+      log.success(`Added ${entry} to .gitignore`);
     }
-
-    if (!gitignoreContent.includes(".env")) {
-      fs.appendFileSync(gitignorePath, "\n.env\n");
-      log.success("Added .env to .gitignore");
-    }
-  } else {
-    // create .gitignore if it doesn't exist
-    fs.writeFileSync(gitignorePath, "\npghelp_config.json\n");
-    log.success("Created .gitignore and added pghelp_config.json to it");
-
-    const gitignoreContent = fs.readFileSync(gitignorePath, "utf8");
-
-    if (!gitignoreContent.includes(".env")) {
-      fs.appendFileSync(gitignorePath, "\n.env\n");
-      log.success("Added .env to .gitignore");
-    }
-  }
+  };
+  ensureIgnored("pghelp_config.json");
+  ensureIgnored(".env");
 
   let client: Client | undefined;
   if (!["setup", "dump"].includes(action)) {
@@ -478,66 +596,25 @@ async function main(): Promise<void> {
     }
   }
 
+  let schemas: string[] = [];
+
+  if (client) {
+    // 🔹 Automatically sync schemas from database
+    config.schemas = (await syncSchemasFromDatabase(client, config)).schemas;
+    schemas = getSchemas(config);
+  } else {
+    schemas = config.schemas || ["public"];
+  }
+
   try {
     if (action === "setup") {
-      const s = spinner();
-      s.start("Setting up local database...");
-      const url = new URL(connectionString);
-      const dbUser = url.username;
-      const dbPassword = url.password;
-      const dbHost = url.hostname;
-      const dbPort = url.port;
-      const dbName = url.pathname.split("/")[1];
-
-      process.env.PGPASSWORD = dbPassword;
-      try {
-        await execPromise(
-          `psql -U ${dbUser} -h ${dbHost} -p ${dbPort} -c "CREATE DATABASE ${dbName}"`
-        );
-      } catch (error) {
-        s.stop("Database already exists.");
-      }
-      try {
-        await execPromise(
-          `psql -U ${dbUser} -h ${dbHost} -p ${dbPort} -c "CREATE ROLE pg_su;"`
-        );
-        await execPromise(
-          `psql -U ${dbUser} -h ${dbHost} -p ${dbPort} -c "CREATE ROLE pg_admin;"`
-        );
-      } catch (error) {
-        s.stop("Roles already exist.");
-      }
-      const initPath = path.join(absPath, "init.sql");
-      if (!fs.existsSync(initPath)) {
-        s.stop("init.sql not found.");
-        process.exit(0);
-      }
-      await execPromise(
-        `psql -U ${dbUser} -h ${dbHost} -p ${dbPort} -d ${dbName} -f ${initPath}`
-      );
-      s.stop("Database setup complete.");
+      await setupDatabase(connectionString, absPath, parsedArgs);
     } else if (action === "help") {
       printHelp();
-      process.exit(0);
     } else if (action === "config") {
       await updateConfig(configFile);
     } else if (action === "dump") {
-      const s = spinner();
-      s.start("Dumping schema...");
-      const dumpPath = path.join(absPath, "init.sql");
-      const url = new URL(connectionString);
-      const dbUser = url.username;
-      const dbPassword = url.password;
-      const dbHost = url.hostname;
-      const dbPort = url.port;
-      const dbName = url.pathname.split("/")[1];
-
-      process.env.PGPASSWORD = dbPassword;
-      await execPromise(
-        `pg_dump -U ${dbUser} -h ${dbHost} -p ${dbPort} -d ${dbName} -f ${dumpPath}`
-      );
-      delete process.env.PGPASSWORD;
-      s.stop("Schema dump complete.");
+      await dumpSchema(connectionString, absPath, parsedArgs);
     } else if (action === "create") {
       const s = spinner();
       s.start("Creating migration...");
@@ -555,96 +632,150 @@ async function main(): Promise<void> {
       s.stop("Migrations reverted successfully.");
     } else if (action === "gentypes") {
       const s = spinner();
-      s.start("Generating types...");
-      const outPath = path.join(absPath, "../types");
-      if (!fs.existsSync(outPath)) {
+      for (const schema of schemas) {
+        const outPath =
+          schemas.length > 1
+            ? path.join(absPath, `../types/${schema}`)
+            : path.join(absPath, "../types");
+
         fs.mkdirSync(outPath, { recursive: true });
+        s.start(`Generating types for schema "${schema}"...`);
+        await generateTypes(client!, outPath, schema);
+        s.stop(`Types generated for "${schema}".`);
       }
-      await generateTypes(client!, outPath);
-      s.stop("Types generated.");
+      await generateTypesIndex(path.join(absPath, "../types"), schemas);
+      s.stop("All types generated.");
     } else if (action === "genfunctypes") {
       const s = spinner();
       s.start("Generating function types...");
       const outPath = path.join(absPath, "../types");
-      if (!fs.existsSync(outPath)) {
-        fs.mkdirSync(outPath, { recursive: true });
-      }
+      fs.mkdirSync(outPath, { recursive: true });
       await generateFunctionTypes(client!, outPath);
       s.stop("Function types generated.");
     } else if (action === "genfunctions") {
       const s = spinner();
       s.start("Generating functions...");
       const outPath = path.join(absPath, "../functions");
-      if (!fs.existsSync(outPath)) {
-        fs.mkdirSync(outPath, { recursive: true });
-      }
+      fs.mkdirSync(outPath, { recursive: true });
       await generateTypeSafeFunctions(client!, outPath);
       s.stop("Functions generated.");
+    } else if (action === "verify") {
+      const s = spinner();
+      s.start("Verifying schemas...");
+      await verifySchemas(client!, schemas);
+      s.stop("Verification complete.");
     } else if (action === "genschema") {
       const s = spinner();
       s.start("Preparing to generate Zod schema...");
 
-      // Ensure type folder exists or generate it
-      const typesPath = path.join(absPath, "../types");
-      if (!fs.existsSync(typesPath)) {
-        fs.mkdirSync(typesPath, { recursive: true });
-        await generateTypes(client!, typesPath);
+      try {
+        // normalize output roots
+        const projectRoot = path.resolve(absPath, "../");
+        const typesRoot = path.join(projectRoot, "types");
+        const schemaRoot = path.join(projectRoot, "schema");
+
+        fs.mkdirSync(typesRoot, { recursive: true });
+        fs.mkdirSync(schemaRoot, { recursive: true });
+
+        log.info(
+          `Generating types for ${schemas.length} schema${
+            schemas.length > 1 ? "s" : ""
+          }...`
+        );
+
+        // generate per schema
+        for (const schema of schemas) {
+          const typesOut =
+            schemas.length > 1 ? path.join(typesRoot, schema) : typesRoot;
+
+          fs.mkdirSync(typesOut, { recursive: true });
+
+          const sType = spinner();
+          sType.start(`Generating types for schema "${schema}"...`);
+          try {
+            await generateTypes(client!, typesOut, schema);
+            sType.stop(`Types generated for ${schema}.`);
+          } catch (err) {
+            sType.stop(`❌ Failed generating types for ${schema}.`);
+            log.error(err instanceof Error ? err.message : String(err));
+          }
+        }
+
+        s.stop("Type generation complete.");
+      } catch (err) {
+        s.stop("Error preparing type generation.");
+        log.error(err instanceof Error ? err.message : String(err));
+        process.exit(1);
       }
 
-      // Ensure schema folder exists
-      const outPath = path.join(absPath, "../schema");
-      if (!fs.existsSync(outPath)) {
-        fs.mkdirSync(outPath, { recursive: true });
-      }
+      // now handle zod schema generation options
+      const outPath = path.resolve(absPath, "../schema");
+      fs.mkdirSync(outPath, { recursive: true });
 
-      s.stop("Ready.");
+      let forceOptional: boolean;
+      let useCoerceDates: boolean;
+      let addDefaultNull: boolean;
 
-      // Prompt for schema generation options
-      const forceOptional = await select({
-        message: "Should all fields be forced optional?",
-        options: [
-          { value: true, label: "Yes — make all fields optional" },
-          { value: false, label: "No — use type definition optionality" },
-        ],
-      });
-      if (isCancel(forceOptional)) {
-        log.error("Cancelled");
-        process.exit(0);
-      }
+      if (nonInteractiveFlag) {
+        forceOptional = forceOptionalFlag;
+        useCoerceDates = coerceDatesFlag;
+        addDefaultNull = defaultNullFlag;
+      } else {
+        const ask = async <T>(
+          message: string,
+          yesLabel: string,
+          noLabel: string
+        ) => {
+          const choice = await select({
+            message,
+            options: [
+              { value: true, label: `Yes — ${yesLabel}` },
+              { value: false, label: `No — ${noLabel}` },
+            ],
+          });
+          if (isCancel(choice)) process.exit(0);
+          return choice;
+        };
 
-      const useCoerceDates = await select({
-        message: "Should Date fields use z.coerce.date()?",
-        options: [
-          { value: true, label: "Yes — coerce date strings to Date objects" },
-          { value: false, label: "No — treat them as strings" },
-        ],
-      });
-      if (isCancel(useCoerceDates)) {
-        log.error("Cancelled");
-        process.exit(0);
-      }
-
-      const addDefaultNull = await select({
-        message: "Add default(null) for nullable fields?",
-        options: [
-          { value: true, label: "Yes — make nullable fields default to null" },
-          { value: false, label: "No — leave them undefined if missing" },
-        ],
-      });
-      if (isCancel(addDefaultNull)) {
-        log.error("Cancelled");
-        process.exit(0);
+        forceOptional = await ask(
+          "Should all fields be forced optional?",
+          "make all fields optional",
+          "use type definition optionality"
+        );
+        useCoerceDates = await ask(
+          "Should Date fields use z.coerce.date()?",
+          "coerce date strings",
+          "keep as strings"
+        );
+        addDefaultNull = await ask(
+          "Add default(null) for nullable fields?",
+          "default to null",
+          "leave undefined"
+        );
       }
 
       const s2 = spinner();
-      s2.start("Generating Zod schema...");
-      await generateSchema(
-        outPath,
-        forceOptional,
-        useCoerceDates,
-        addDefaultNull
-      );
-      s2.stop("Zod schema generated.");
+      s2.start("Generating Zod schema files...");
+
+      try {
+        // ✅ FIXED: now passing schemas as the 5th argument
+        await generateSchema(
+          outPath,
+          forceOptional,
+          useCoerceDates,
+          addDefaultNull,
+          schemas
+        );
+
+        await generateSchemaIndex(outPath, schemas);
+
+        s2.stop("Zod schema generated successfully.");
+        log.success(`Schema output → ${outPath}`);
+      } catch (err) {
+        s2.stop("❌ Failed to generate Zod schema.");
+        log.error(err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
     }
   } catch (error: any) {
     log.error("An error occurred: " + error);

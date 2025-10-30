@@ -2,6 +2,7 @@ export type Config = {
   migrationsDir: string;
   migrationPath: string;
   migrationsTable: string;
+  schemas?: string[];
 };
 
 export type PgUserFunction = {
@@ -26,6 +27,7 @@ export type Action =
   | "genschema"
   | "genoptionalschema"
   | "config"
+  | "verify"
   | "help";
 
 export type Operator = "=" | "!=" | "<" | "<=" | ">" | ">=" | "LIKE" | "IN";

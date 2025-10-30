@@ -119,7 +119,7 @@ function pascalCase(str: string): string {
 }
 
 /* ----------------------------------------------
- * Core: Generate table types
+ * Core: Generate table types (with schema suffix)
  * ---------------------------------------------- */
 export async function generateTypes(
   client: Client,
@@ -131,6 +131,7 @@ export async function generateTypes(
     [schema]
   );
 
+  const schemaSuffix = schema !== "public" ? `_${pascalCase(schema)}` : "";
   let typeDefs = "// Auto-generated types from database schema\n";
 
   for (const { table_name } of tables.rows) {
@@ -192,7 +193,6 @@ export async function generateTypes(
       // Nullability
       if (!col.not_null) tsType += " | null";
 
-      // Optional inline JSDoc with description
       const comment = col.description
         ? `  /** ${col.description.trim()} */\n`
         : "";
@@ -200,25 +200,28 @@ export async function generateTypes(
     }
 
     typeDefs += `
-export type ${pascalCase(table_name)}_Type = {
+export type ${pascalCase(table_name)}${schemaSuffix}_Type = {
 ${fieldStrings.join("\n")}
 };
 `;
   }
 
-  // Schema aggregator
+  // Schema aggregator (schema-qualified)
   typeDefs += `
-export type DatabaseSchema = {
+export type DatabaseSchema${schemaSuffix} = {
   ${tables.rows
-    .map((row) => `${row.table_name}: ${pascalCase(row.table_name)}_Type`)
+    .map(
+      (row) =>
+        `${row.table_name}: ${pascalCase(row.table_name)}${schemaSuffix}_Type`
+    )
     .join(";\n  ")}
 };
-export type DatabaseSchemaKeys = keyof DatabaseSchema;
+export type DatabaseSchemaKeys${schemaSuffix} = keyof DatabaseSchema${schemaSuffix};
 `;
 
   const typeFilePath = path.resolve(outPath, "./generated-types.ts");
   await fs.writeFile(typeFilePath, typeDefs, "utf8");
-  console.log(`✅ Types written to ${typeFilePath}`);
+  console.log(`✅ Types written for schema "${schema}" → ${typeFilePath}`);
 }
 
 /* ----------------------------------------------
@@ -351,4 +354,22 @@ async function getReturnTypeFromList(
 
   const tsType = mapPostgresTypeByName(returnType);
   return returnsSet ? `${tsType}[]` : tsType;
+}
+
+/* ----------------------------------------------
+ * New: Generate types index file
+ * ---------------------------------------------- */
+export async function generateTypesIndex(
+  typesRoot: string,
+  schemas: string[]
+): Promise<void> {
+  const lines: string[] = [];
+  for (const schema of schemas) {
+    const subdir =
+      schemas.length > 1 ? `./${schema}/generated-types` : `./generated-types`;
+    lines.push(`export * from "${subdir}";`);
+  }
+  const outFile = path.join(typesRoot, "index.ts");
+  await fs.writeFile(outFile, lines.join("\n") + "\n", "utf8");
+  console.log(`📦 Wrote type index → ${outFile}`);
 }
