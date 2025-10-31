@@ -1,85 +1,92 @@
-# pghelp
+<h1 align="center">🐘 pghelp</h1>
 
-A versatile CLI tool for PostgreSQL developers, offering schema dumps, migrations, and TypeScript code generation out of the box.
+<p align="center">
+  A powerful CLI tool for <b>PostgreSQL developers</b> — combining schema management, migrations, and TypeScript code generation into a single workflow.
+</p>
 
-## Features
+### 🚀 Overview
 
-- Setup Local Database: Create a new database and roles, then run an initial SQL script.
-- Dump Schema: Export your database schema to init.sql.
-- Create Migrations: Scaffold up/down SQL files with timestamped names.
-- Run/Revert Migrations: Apply or roll back migrations.
-- Generate Types: Produce TypeScript types from tables.
-- Generate Function Types: Type definitions for user‑defined Postgres functions.
-- Generate Zod Schema: Create Zod validators for your tables.
-- Generate Type‑Safe Functions: Auto‑generate TS wrappers around SQL functions.
-- Interactive Prompts: Fallbacks for missing CLI args via @clack/prompts.
-- Env Management: Ensures DATABASE_URL in .env, prompts if missing. Ensures .env exists in .gitignore.
-- Config File: Persist migration settings in pghelp_config.json. Also adds to .gitignore.
-- Query Builder: TypeSafe query builder for constructing SQL queries with a fluent API.
+pghelp is a command-line tool designed for PostgreSQL + TypeScript workflows.
+It helps you:
 
-## Installation
+- Bootstrap databases
+- Run and revert migrations
+- Dump schemas
+- Generate TypeScript types, Zod schemas, and type-safe functions
+- Keep configuration and environment setup clean and automated
+- All with interactive prompts or fully non-interactive scripts.
 
-1. npm
+---
+
+### ✨ Features
+
+- Database Setup — Quickly initialize a local Postgres database.
+- Schema Dumping — Export your schema to a .sql file.
+- Migrations — Create timestamped up/down migration files and run or revert them.
+- Type Generation — Generate TypeScript types from your database tables.
+- Function Type Generation — Derive TypeScript definitions for Postgres functions.
+- Zod Schema Generation — Create fully-typed validators with optional coercion and defaults.
+- Type-Safe SQL Wrappers — Generate TS functions for your queries.
+- Interactive Prompts — Uses @clack/prompts for a friendly UX.
+- .env Validation — Ensures DATABASE_URL exists and updates .env if missing.
+- Config Management — Saves all paths/schemas in pghelp_config.json (auto-ignored in .gitignore).
+- Schema Auto-Sync — Automatically updates config if new schemas are found in your database.
+- Non-Interactive Mode — Perfect for CI/CD pipelines.
+
+---
+
+### 📦 Installation
+
+Global install
 
 ```bash
 npm install -g pghelp
-```
-
-2. yarn
-
-```bash
+# or
 yarn global add pghelp
-```
-
-3. pnpm
-
-```bash
+# or
 pnpm add -g pghelp
 ```
 
-4. Or, if you prefer to use it as a local dependency, install it in your project:
+Local install
 
 ```bash
 npm install pghelp
-```
-
-```bash
+# or
 yarn add pghelp
-```
-
-```bash
+# or
 pnpm add pghelp
 ```
 
-- then add a script to your package.json:
+Then add it to your package.json scripts:
 
 ```json
 {
   "scripts": {
     "pghelp": "pghelp",
-    "dump": "pghelp --action dump"
-    // etc...
+    "migrate": "pghelp --action run",
+    "revert": "pghelp --action revert --revert 1"
   }
 }
 ```
 
-## CLI Usage
+---
 
-````bash
-# Start Interactive CLI
-pghelp
+### 💻 Usage
 
-# Help
-pghelp --help
+Start Interactive Mode
 
-# Update pghelp config
-pghelp --config
+```bash
+npx pghelp
+```
 
-# Dump your schema
-pghelp --action dump
+Run Specific Actions
 
-# Setup a fresh local database
+```bash
+# Initialize local database
 pghelp setup
+
+# Dump your current schema
+pghelp --action dump
 
 # Create a new migration
 pghelp create --name add_users_table
@@ -90,72 +97,177 @@ pghelp run
 # Revert last 2 migrations
 pghelp revert --revert 2
 
-# Generate TypeScript types for tables
+# Generate TypeScript types
 pghelp gentypes
 
-# Generate TS types for Postgres functions
+# Generate function types
 pghelp genfunctypes
 
-# Generate Zod schemas
+# Generate Zod schema files
 pghelp genschema
 
-# Generate type-safe TS function wrappers
-pghelp genfunctions```
-````
+# Generate type-safe TS wrappers around SQL functions
+pghelp genfunctions
 
-### Flags
+# Verify schema drift
+pghelp verify
 
-```bash
---action <dump|setup|create|run|revert|gentypes|genfunctypes|genschema|genfunctions>
---name or --migration (for create)
---revert <count> (for revert)
---db-url <DATABASE_URL>
+# Reconfigure pghelp interactively
+pghelp config
+
+# Display help
+pghelp help
 ```
 
-### Configuration
+---
 
-On first run, you’ll be prompted for:
+### ⚙️ Options & Flags
 
-- .env file path
-- DATABASE_URL if not found
+| Flag                        | Description                                                                                                                                |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--action <action>`         | Specify which action to perform (setup, dump, create, run, revert, gentypes, genfunctypes, genschema, genfunctions, verify, config, help). |
+| `--schemas <list>`          | Comma-separated schema names (default: "public").                                                                                          |
+| `--db-url <url>`            | Provide a Postgres connection string manually.                                                                                             |
+| `--migration-path <path>`   | Base path for migration files (default: "db").                                                                                             |
+| `--migrations-dir <dir>`    | Directory for migrations (default: "migrations").                                                                                          |
+| `--migrations-table <name>` | Table used to track migrations (default: "migrations").                                                                                    |
+| `--name`, `--migration`     | Specify migration name (for create).                                                                                                       |
+| `--revert <count>`          | Number of migrations to revert (for revert).                                                                                               |
+| `--non-interactive`         | Run in non-interactive mode (CI-friendly).                                                                                                 |
+| `--force-optional`          | (for genschema) Force all fields to be optional.                                                                                           |
+| `--coerce-dates`            | (for genschema) Use z.coerce.date() for date columns.                                                                                      |
+| `--default-null`            | (for genschema) Add .default(null) for nullable fields (default: true).                                                                    |
+
+---
+
+### ⚡ Configuration
+
+When pghelp runs for the first time, it asks for:
+
+- .env path and database URL
 - Base migration path
 - Migrations directory name
-- Migrations table name (syncs with postgres)
+- Migrations table name
+- Schemas (comma-separated)
 
-These are saved to pghelp_config.json and auto‑ignored in .gitignore.
+It saves them in `pghelp_config.json` at your project root.
 
-#### Defaults
+Example:
 
 ```json
 {
   "migrationPath": "db",
   "migrationsDir": "migrations",
-  "migrationsTable": "migrations"
+  "migrationsTable": "migrations",
+  "schemas": ["public"]
 }
 ```
 
-You can update these settings in pghelp_config.json or via the CLI at any time.
+✅ Both `.env` and `pghelp_config.json` are automatically added to .gitignore.
 
-## Query Builder
+You can reconfigure anytime with:
 
-This package also exports a TypeSafe query builder. It's a TypeScript-based query builder for constructing SQL queries with a fluent API. This library supports SELECT, INSERT, UPDATE, and DELETE operations, along with advanced features like joins, aggregates, subqueries, and window functions.
+```bash
+pghelp config
+```
 
-### BYO DRIVER. This only generates the SQL and params, it does not execute them.
+---
+
+### 🧩 Schema & Type Generation
+
+#### TypeScript Types
+
+Generate per-schema types into /types/ (multi-schema supported):
+
+```bash
+pghelp gentypes
+```
+
+#### Function Types
+
+Generate TS signatures for Postgres functions:
+
+```bash
+pghelp genfunctypes
+```
+
+#### Type-Safe Functions
+
+Generate ready-to-use TypeScript wrappers around SQL functions:
+
+```bash
+pghelp genfunctions
+```
+
+#### Zod Schema Generation
+
+```bash
+pghelp genschema
+```
+
+Supports advanced flags:
+
+```bash
+# Fully automatic mode
+pghelp genschema --non-interactive --force-optional --coerce-dates
+
+# Example output:
+# /schema/schema.ts
+# /schema/index.ts
+```
+
+The generator will:
+
+- Recreate /schema and /types folders
+- Sync with your current DB schemas
+- Ask whether to coerce dates, force optional fields, and use null defaults (if interactive)
+
+---
+
+### 🧮 Automatic Schema Sync
+
+Every time pghelp connects to your database, it:
+
+- Queries pg_namespace for non-system schemas.
+- Compares with your config.
+- Updates pghelp_config.json if differences are found.
+
+No more manual schema mismatches. 🎉
+
+---
+
+### 🧯 Troubleshooting
+
+| Problem                      | Cause                     | Fix                                   |
+| ---------------------------- | ------------------------- | ------------------------------------- |
+| pghelp: command not found    | Not installed globally    | Use npx pghelp or install globally    |
+| Invalid database URL         | Missing or malformed .env | Add a valid DATABASE_URL              |
+| Connection refused           | Postgres not running      | Start Postgres and check connection   |
+| permission denied for schema | Insufficient privileges   | Grant USAGE and CREATE on schema      |
+| Schema drift detected        | Migrations out of sync    | Run pghelp verify or rerun migrations |
+
+---
+
+### 🏗️ Query Builder
+
+pghelp also exports a TypeScript-based query builder for constructing SQL queries with a fluent API. This library supports SELECT, INSERT, UPDATE, and DELETE operations, along with advanced features like joins, aggregates, subqueries, and window functions.
+
+> **Note:** This is a static SQL builder. It only generates SQL and params—you bring your own database driver for execution.
 
 ### Features
 
-- **Fluent API** for building SQL queries.
-- Support for **SELECT**, **INSERT**, **UPDATE**, and **DELETE** operations.
-- **Joins** (INNER and LEFT) and **includes** for related tables.
-- **Aggregates** (COUNT, SUM, AVG, MAX, MIN).
-- **Subqueries** in SELECT and WHERE clauses.
-- **Window functions** (e.g., ROW_NUMBER, RANK).
-- **Parameterized queries** to prevent SQL injection.
-- Support for **Common Table Expressions (CTEs)**.
+- Fluent API for building SQL queries
+- Support for SELECT, INSERT, UPDATE, and DELETE operations
+- Joins (INNER and LEFT) and includes for related tables
+- Aggregates (COUNT, SUM, AVG, MAX, MIN)
+- Subqueries in SELECT and WHERE clauses
+- Window functions (e.g., ROW_NUMBER, RANK)
+- Parameterized queries to prevent SQL injection
+- Support for Common Table Expressions (CTEs)
 
 ### Usage
 
-Initialize the Query Builder
+#### Initialize the Query Builder
 
 ```typescript
 import { createQueryBuilder } from "pghelp";
@@ -164,13 +276,20 @@ type DatabaseSchema = {
   users: {
     id: number;
     name: string;
+    email: string;
   };
-}; // Import YOUR schema generated with pghelp
+  posts: {
+    id: number;
+    user_id: number;
+    title: string;
+    content: string;
+  };
+};
 
-export const qb = createQueryBuilder<DatabaseSchema>();
+const db = createQueryBuilder<DatabaseSchema>();
 ```
 
-SELECT Queries
+#### SELECT Queries
 
 ```typescript
 const query = db.from("users").select("id", "name").toSQL();
@@ -178,7 +297,7 @@ console.log(query.sql); // SELECT id, name FROM users AS users
 console.log(query.params); // []
 ```
 
-SELECT with WHERE
+#### SELECT with WHERE
 
 ```typescript
 const query = db.from("users").select("id", "name").where("id", "=", 1).toSQL();
@@ -186,7 +305,7 @@ console.log(query.sql); // SELECT id, name FROM users AS users WHERE users.id = 
 console.log(query.params); // [1]
 ```
 
-SELECT with JOIN
+#### SELECT with JOIN
 
 ```typescript
 const query = db
@@ -198,7 +317,7 @@ console.log(query.sql); // SELECT id, name, posts.title FROM users AS users INNE
 console.log(query.params); // []
 ```
 
-SELECT with Aggregates
+#### SELECT with Aggregates
 
 ```typescript
 const query = db
@@ -211,7 +330,7 @@ console.log(query.sql); // SELECT id, COUNT(users.id) AS user_count FROM users A
 console.log(query.params); // []
 ```
 
-SELECT with Subquery
+#### SELECT with Subquery
 
 ```typescript
 const subquery = db
@@ -230,7 +349,7 @@ console.log(query.sql); // SELECT id, name, (SELECT user_id, COUNT(posts.id) AS 
 console.log(query.params); // []
 ```
 
-INSERT Queries
+#### INSERT Queries
 
 ```typescript
 const query = db
@@ -242,7 +361,7 @@ console.log(query.sql); // INSERT INTO users (id, name, email) VALUES ($1, $2, $
 console.log(query.params); // [1, "Alice", "alice@example.com"]
 ```
 
-UPDATE Queries
+#### UPDATE Queries
 
 ```typescript
 const query = db
@@ -255,7 +374,7 @@ console.log(query.sql); // UPDATE users SET email = $1 WHERE id = $2 RETURNING i
 console.log(query.params); // ["alice@newdomain.com", 1]
 ```
 
-DELETE Queries
+#### DELETE Queries
 
 ```typescript
 const query = db
@@ -268,7 +387,7 @@ console.log(query.sql); // DELETE FROM users WHERE id = $1 RETURNING id, name
 console.log(query.params); // [1]
 ```
 
-Common Table Expressions (CTEs)
+#### Common Table Expressions (CTEs)
 
 ```typescript
 const cteQuery = db
@@ -288,7 +407,7 @@ console.log(query.sql); // WITH post_counts AS (SELECT user_id, COUNT(posts.id) 
 console.log(query.params); // []
 ```
 
-Window Functions
+#### Window Functions
 
 ```typescript
 const query = db
@@ -306,10 +425,15 @@ console.log(query.sql); // SELECT id, name, ROW_NUMBER(users.id) OVER (PARTITION
 console.log(query.params); // []
 ```
 
-## Contributing
+---
 
-Contributions are welcome! Please open an issue or submit a pull request.
+### 🤝 Contributing
 
-## License
+Contributions and feedback are always welcome!
+If you’d like to improve pghelp, open a pull request or file an issue.
 
-This project is licensed under the MIT License.
+### 📜 License
+
+© Forever Frameworks
+
+<sub>Language: TypeScript • Database: PostgreSQL • License: MIT</sub>
