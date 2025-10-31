@@ -1,7 +1,7 @@
 {
   "name": "pghelp",
   "description": "A command line tool for all flavors of PostgreSQL use.",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "license": "MIT",
   "author": "Sean Cotter <sd.cotter45@gmail.com>",
   "homepage": "https://github.com/Cotter45/pghelp",
@@ -47,11 +47,11 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.11.0",
-    "@typescript-eslint/typescript-estree": "^8.46.2",
     "dotenv": "^17.2.3",
     "minimist": "^1.2.8",
     "pg": "^8.16.3",
-    "picocolors": "^1.1.1"
+    "picocolors": "^1.1.1",
+    "ts-morph": "^27.0.2"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
